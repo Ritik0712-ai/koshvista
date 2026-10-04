@@ -6,7 +6,7 @@ An open-source, responsive personal-finance workspace for accounts, cash, spendi
 
 - React 19, TypeScript, Vite, Inter, Radix Dialog, Lucide and ECharts.
 - Neon PostgreSQL, Managed Auth, Functions and private Object Storage.
-- Cloudflare Workers Static Assets hosting. No Supabase service is used.
+- Vercel static hosting (Cloudflare configuration retained for future use). No Supabase service is used.
 - Decimal.js calculations; browser CSV/PDF/OCR processing; optional local MobileBERT category suggestions with Transformers.js.
 - AES-256-GCM encrypted archives, PBKDF2-SHA256 derivation and Google Drive appDataFolder backup integration.
 

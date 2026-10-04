@@ -30,7 +30,7 @@ Responsive dashboard, cash/account ledger, transactions and transfers, budgets, 
 
 ## External setup in progress
 
-The user created the `koshvista` Cloudflare Worker and connected GitHub. Its initial deploy failed because Wrangler incorrectly auto-detected Hono and had no explicit configuration. On 5 October, added a pinned-lockfile Wrangler dependency, explicit static asset build/routing configuration, and public production API/Auth endpoints. Production build and Wrangler dry run passed. Live deployment verification is in progress.
+The user created the `koshvista` Cloudflare Worker and connected GitHub. Its initial deploy failed because Wrangler incorrectly auto-detected Hono and had no explicit configuration. On 5 October, added a pinned-lockfile Wrangler dependency, explicit static asset build/routing configuration, and public production API/Auth endpoints. Production build and Wrangler dry run passed. Cloudflare build `104be1c2-20bc-4d95-bfab-7cc861e77a8d` compiled successfully and uploaded all 20 assets. Publishing failed because the account has no workers.dev subdomain. An authenticated registration attempt returned HTTP 403 / code 10039: “You cannot register a workers.dev subdomain. Please contact abusereply@cloudflare.com for assistance.” The website is not publicly live. Support must resolve the account restriction before public URL, origin configuration and live authentication verification can proceed. No further name retries or alternative hosts were used. Eleven unit tests passed; eight database integration tests were skipped in this run because test credentials were not loaded.
 
 ## Required before calling this production complete
 
