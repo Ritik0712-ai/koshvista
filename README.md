@@ -6,7 +6,7 @@ An open-source, responsive personal-finance workspace for accounts, cash, spendi
 
 - React 19, TypeScript, Vite, Inter, Radix Dialog, Lucide and ECharts.
 - Neon PostgreSQL, Managed Auth, Functions and private Object Storage.
-- Cloudflare Pages static hosting. No Supabase service is used.
+- Cloudflare Workers Static Assets hosting. No Supabase service is used.
 - Decimal.js calculations; browser CSV/PDF/OCR processing; optional local MobileBERT category suggestions with Transformers.js.
 - AES-256-GCM encrypted archives, PBKDF2-SHA256 derivation and Google Drive appDataFolder backup integration.
 
@@ -55,3 +55,7 @@ The architecture uses free tiers and local inference, with no paid AI gateway. P
 ## License
 
 Apache-2.0. Third-party libraries and model weights retain their own licences. The optional classifier is [Xenova/mobilebert-uncased-mnli](https://huggingface.co/Xenova/mobilebert-uncased-mnli); verify its suitability before relying on suggestions.
+
+## Cloudflare deployment
+
+The existing `koshvista` Worker is connected to this repository. Its deploy command is `npx wrangler deploy`; `wrangler.jsonc` runs `npm run build` and uploads only `dist`, with SPA navigation fallback. Leave the separate dashboard build command empty to avoid building twice. `.env.production` contains only public browser endpoints; override those for your own deployment. Keep all credentials in ignored `.env.local` or server-side secret storage. The Hono API is deployed separately to Neon Functions.

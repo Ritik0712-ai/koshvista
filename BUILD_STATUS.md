@@ -30,9 +30,7 @@ Responsive dashboard, cash/account ledger, transactions and transfers, budgets, 
 
 ## External setup in progress
 
-Cloudflare credentials are accepted for listing projects, but project creation returned 403, “Subdomain is blocked”, for both attempted names. User explicitly chose **Cloudflare only** and is creating the Pages project through the dashboard. Await project name and actual `pages.dev` URL. Do not switch to Vercel.
-
-Once available: deploy the upload bundle, add the actual frontend origin to Neon Auth's trusted domains and API CORS, verify real Google sign-in, then test real authenticated persistence. Native Cloudflare Git integration is not available for a Direct Upload project; automate future deployments with GitHub Actions and Wrangler.
+The user created the `koshvista` Cloudflare Worker and connected GitHub. Its initial deploy failed because Wrangler incorrectly auto-detected Hono and had no explicit configuration. On 5 October, added a pinned-lockfile Wrangler dependency, explicit static asset build/routing configuration, and public production API/Auth endpoints. Production build and Wrangler dry run passed. Live deployment verification is in progress.
 
 ## Required before calling this production complete
 
