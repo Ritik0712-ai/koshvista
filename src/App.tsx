@@ -1025,7 +1025,7 @@ export function App() {
                         >
                           {source.mime_type === "application/zip"
                             ? "Download saved screenshots"
-                            : "Open saved original"}
+                            : "Download saved original"}
                         </button>
                       )}
                       <Link to={base + "/imports"}>View document library</Link>

@@ -49,12 +49,10 @@ export async function openSourceOriginal(source: {
   const { url } = await request<{ url: string }>(
     "/documents/" + source.id + "/url",
   );
-  if (source.mime_type === "application/zip") {
-    const response = await fetch(url);
-    if (!response.ok)
-      throw Error(
-        "The saved screenshots could not be downloaded. Please try again.",
-      );
-    download(await response.blob(), source.name, "application/zip");
-  } else window.open(url, "_blank", "noopener,noreferrer");
+  const response = await fetch(url);
+  if (!response.ok)
+    throw Error(
+      "The saved original could not be downloaded. Please try again.",
+    );
+  download(await response.blob(), source.name, source.mime_type);
 }

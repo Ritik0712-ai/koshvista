@@ -942,7 +942,7 @@ export function ImportPage({
               >
                 {s.mime_type === "application/zip"
                   ? "Download saved screenshots"
-                  : "Open saved original"}
+                  : "Download saved original"}
               </button>
             )}
           </div>
@@ -977,7 +977,7 @@ export function ImportPage({
                   }
                 }}
               >
-                Open original
+                Download original
               </button>
             )}
           </div>
