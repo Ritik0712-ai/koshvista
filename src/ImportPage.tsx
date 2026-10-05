@@ -30,6 +30,8 @@ export function ImportPage({
     [type, setType] = useState("statement");
   async function read(f: File) {
     setFile(f);
+    setRows([]);
+    setText("");
     setBusy(true);
     setStatus("Reading file…");
     try {

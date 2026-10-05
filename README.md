@@ -56,6 +56,10 @@ The architecture uses free tiers and local inference, with no paid AI gateway. P
 
 Apache-2.0. Third-party libraries and model weights retain their own licences. The optional classifier is [Xenova/mobilebert-uncased-mnli](https://huggingface.co/Xenova/mobilebert-uncased-mnli); verify its suitability before relying on suggestions.
 
-## Cloudflare deployment
+## Vercel deployment
+
+The `koshvista` project is linked to `Ritik0712-ai/koshvista` on the Vercel Hobby plan. `vercel.json` selects Vite, builds with `npm run build`, serves `dist`, configures SPA deep links and applies security headers. Public browser endpoints are read from `.env.production`. Neon still runs authentication, PostgreSQL, API functions and private storage. Add only the verified production origin to Neon Auth trusted domains and API CORS.
+
+## Cloudflare deployment (retained)
 
 The existing `koshvista` Worker is connected to this repository. Its deploy command is `npx wrangler deploy`; `wrangler.jsonc` runs `npm run build` and uploads only `dist`, with SPA navigation fallback. Leave the separate dashboard build command empty to avoid building twice. `.env.production` contains only public browser endpoints; override those for your own deployment. Keep all credentials in ignored `.env.local` or server-side secret storage. The Hono API is deployed separately to Neon Functions.

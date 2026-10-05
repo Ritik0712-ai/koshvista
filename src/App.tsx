@@ -55,6 +55,7 @@ import { Editor, fields, type Field } from "./components/Editor";
 import { Chart } from "./components/Chart";
 import { ImportPage } from "./ImportPage";
 import { BackupPage } from "./BackupPage";
+import { AnalyticsPage } from "./AnalyticsPage";
 import { useBackup } from "./lib/useBackup";
 const navigation = [
   ["", "Overview", LayoutDashboard],
@@ -73,6 +74,24 @@ const navigation = [
 export function Login() {
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const session = useQuery({
+    queryKey: ["session"],
+    queryFn: async () => {
+      const result = await auth!.getSession();
+      if (result.error) throw new Error(result.error.message);
+      return result.data;
+    },
+    enabled: !!auth,
+    retry: false,
+    staleTime: 0,
+  });
+  if (session.data?.user) return <Navigate to="/app" replace />;
+  if (auth && session.isPending)
+    return (
+      <div className="loading" role="status">
+        Completing secure sign-in…
+      </div>
+    );
   return (
     <div className="login">
       <div className="login-art">
@@ -128,9 +147,10 @@ export function Login() {
             workspace below.
           </p>
         )}
-        {error && (
+        {(error || session.error) && (
           <p role="alert" className="error">
-            {error}
+            {error ||
+              "Sign-in could not be completed. Please try Continue with Google again."}
           </p>
         )}
         <div className="divider">or take a look around</div>
@@ -402,6 +422,17 @@ export function App() {
   if (!demo && !auth) return <Navigate to="/" />;
   if (!demo && session.isPending)
     return <div className="loading">Opening your secure workspace…</div>;
+  if (!demo && session.error)
+    return (
+      <div className="loading" role="alert">
+        <h2>Sign-in needs another try</h2>
+        <p>
+          We could not confirm your session. Your saved records are unchanged.
+        </p>
+        <button onClick={() => session.refetch()}>Retry sign-in</button>
+        <Link to="/">Back to sign-in</Link>
+      </div>
+    );
   if (!demo && !session.data?.user) return <Navigate to="/" />;
   if (!demo && state.isPending)
     return <div className="loading">Loading your financial records…</div>;
@@ -1349,87 +1380,7 @@ export function App() {
               </section>
             </>
           )}
-          {page === "analytics" && (
-            <>
-              <div className="section-head">
-                <p className="muted">
-                  Charts include recorded data in {currency}. Transfers are
-                  excluded from spending.
-                </p>
-                <input
-                  aria-label="Analytics month"
-                  type="month"
-                  value={month}
-                  onChange={(e) => setMonth(e.target.value)}
-                />
-              </div>
-              <div className="dashboard-grid">
-                <section className="panel">
-                  <h2>Income vs expenses</h2>
-                  <Chart option={bar} label="Monthly income and expenses" />
-                </section>
-                <section className="panel">
-                  <h2>Expense sizes</h2>
-                  <Chart
-                    label="Histogram of expense amounts"
-                    option={{
-                      color: ["#147e70"],
-                      grid: { left: 45, right: 15, bottom: 45, top: 30 },
-                      xAxis: {
-                        type: "category",
-                        data: ["<500", "500–2k", "2k–5k", "5k–10k", "10k+"],
-                      },
-                      yAxis: { type: "value", minInterval: 1 },
-                      series: [
-                        {
-                          type: "bar",
-                          data: [0, 500, 2000, 5000, 10000].map(
-                            (lo, i) =>
-                              es.filter(
-                                (e) =>
-                                  e.kind === "expense" &&
-                                  d(e.amount).abs().gte(lo) &&
-                                  (i === 4 ||
-                                    d(e.amount)
-                                      .abs()
-                                      .lt([500, 2000, 5000, 10000][i])),
-                              ).length,
-                          ),
-                          barWidth: "80%",
-                        },
-                      ],
-                    }}
-                  />
-                </section>
-              </div>
-              <section className="panel spaced">
-                <h2>Category breakdown</h2>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Category</th>
-                      <th>Spent</th>
-                      <th>Share</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {cats.map((c) => (
-                      <tr key={c.name}>
-                        <td>{c.name}</td>
-                        <td>{fmt(c.value, currency)}</td>
-                        <td>
-                          {spent.gt(0)
-                            ? d(c.value).div(spent).mul(100).toFixed(1)
-                            : 0}
-                          %
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </section>
-            </>
-          )}
+          {page === "analytics" && <AnalyticsPage w={w} />}
           {page === "imports" && (
             <ImportPage
               w={w}
