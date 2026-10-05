@@ -8,12 +8,14 @@ export async function request<T = unknown>(
   body?: unknown,
 ): Promise<T> {
   if (!auth) throw new Error("Neon sign-in is not configured yet.");
-  const token = await auth.token();
-  if (!token.data?.token) throw new Error("Please sign in again.");
+  // Neon injects its API JWT into the managed getSession response.
+  const session = await auth.getSession();
+  const token = session.data?.session?.token;
+  if (!token) throw new Error("Please sign in again.");
   const r = await fetch((import.meta.env.VITE_API_URL ?? "") + "/api" + path, {
     method,
     headers: {
-      Authorization: "Bearer " + token.data.token,
+      Authorization: "Bearer " + token,
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
