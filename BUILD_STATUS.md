@@ -33,3 +33,7 @@ Document reading and optional AI classification run in the browser. Local AI sug
 - Backend function deployment is currently a separate controlled CLI step; frontend main pushes automatically deploy through Vercel.
 
 This checkpoint distinguishes implemented functionality from unverified external integrations; it is not a claim that every production acceptance criterion is complete.
+
+## Screenshot batch update
+
+Up to six PNG/JPEG images can be imported together within the 20 MB source limit. Extraction combines them into one review with per-image progress. Originals are preserved in a deterministic ZIP archive; selection order changes do not create a new source hash. Repeated identical images are rejected. Possible overlapping transaction rows remain unchecked; repeated identical holding records block posting until corrected. Synthetic six-image browser OCR produced six review records without errors.

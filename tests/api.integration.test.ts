@@ -1,6 +1,7 @@
 import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
+import { zipSync, unzipSync } from "fflate";
 vi.mock("jose", () => ({
   createRemoteJWKSet: () => ({}),
   jwtVerify: async (token: string) => {
@@ -370,6 +371,59 @@ describe.runIf(enabled)(
         ).toBe(200);
         const read = (await call("/documents/" + id + "/url")).data.url;
         expect(await (await fetch(read)).text()).toBe(original);
+      },
+      30000,
+    );
+    it.runIf(!!process.env.AWS_ACCESS_KEY_ID)(
+      "saves all screenshot originals as one private downloadable archive",
+      async () => {
+        const contents = Object.fromEntries(
+          Array.from({ length: 6 }, (_, i) => [
+            "screenshot-" + i + ".png",
+            new TextEncoder().encode("Synthetic image bytes " + i),
+          ]),
+        );
+        const original = zipSync(contents, { level: 0 });
+        const saved = await call("/documents", "POST", {
+          name: "QA-six-screenshots.zip",
+          sha256: "e".repeat(64),
+          mime_type: "application/zip",
+          byte_size: original.length,
+          extracted_text: "Combined synthetic screenshot text",
+          purpose: "portfolio",
+        });
+        expect(saved.status).toBe(201);
+        const id = saved.data.source_id;
+        const upload = (await call("/documents/" + id + "/upload-url", "POST"))
+          .data.url;
+        expect(
+          (
+            await fetch(upload, {
+              method: "PUT",
+              headers: { "Content-Type": "application/zip" },
+              body: original,
+            })
+          ).ok,
+        ).toBe(true);
+        expect(
+          (await call("/documents/" + id + "/confirm", "POST")).status,
+        ).toBe(200);
+        const read = await fetch(
+          (await call("/documents/" + id + "/url")).data.url,
+          { headers: { Origin: "https://koshvista.vercel.app" } },
+        );
+        expect(read.ok).toBe(true);
+        expect(["*", "https://koshvista.vercel.app"]).toContain(
+          read.headers.get("access-control-allow-origin"),
+        );
+        const restored = unzipSync(new Uint8Array(await read.arrayBuffer()));
+        expect(Object.keys(restored)).toHaveLength(6);
+        expect(restored).toEqual(contents);
+        expect(
+          (await call("/documents/" + id + "/url", "GET", undefined, other))
+            .status,
+        ).toBe(404);
+        expect((await call("/documents/" + id, "DELETE")).status).toBe(200);
       },
       30000,
     );

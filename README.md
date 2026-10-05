@@ -71,3 +71,7 @@ Choose bank statement, portfolio or FD/bond, upload a CSV/PDF/image, and review 
 **Suggest categories** runs an optional local classifier. Progress and errors are visible; suggested rows remain unchecked until reviewed. OCR and AI can make mistakes. Password-protected PDFs accept an in-memory password that is never saved.
 
 Production Google/Drive setup is documented in [GOOGLE_SETUP.md](GOOGLE_SETUP.md).
+
+### Multiple screenshots
+
+Select up to **six PNG/JPEG screenshots** of the same statement, portfolio or holding in one upload (20 MB total). Each image is read sequentially; extracted text and records appear in one review. **Save N screenshots** retains all unmodified originals in one private ZIP archive. Opening the saved original downloads that archive. PDF and CSV imports remain one file at a time. Possible overlapping transaction rows remain unchecked, and repeated identical holding records must be removed or corrected before posting.

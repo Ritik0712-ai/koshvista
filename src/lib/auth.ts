@@ -40,3 +40,21 @@ export function download(
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+export async function openSourceOriginal(source: {
+  id: string;
+  name: string;
+  mime_type: string;
+}) {
+  const { url } = await request<{ url: string }>(
+    "/documents/" + source.id + "/url",
+  );
+  if (source.mime_type === "application/zip") {
+    const response = await fetch(url);
+    if (!response.ok)
+      throw Error(
+        "The saved screenshots could not be downloaded. Please try again.",
+      );
+    download(await response.blob(), source.name, "application/zip");
+  } else window.open(url, "_blank", "noopener,noreferrer");
+}

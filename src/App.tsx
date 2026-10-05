@@ -27,7 +27,7 @@ import {
   Coins,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { auth, request, download } from "./lib/auth";
+import { auth, request, download, openSourceOriginal } from "./lib/auth";
 import { sample } from "./lib/sample";
 import {
   EMPTY,
@@ -1017,20 +1017,15 @@ export function App() {
                           className="secondary"
                           onClick={async () => {
                             try {
-                              const result = await request<{ url: string }>(
-                                "/documents/" + source.id + "/url",
-                              );
-                              window.open(
-                                result.url,
-                                "_blank",
-                                "noopener,noreferrer",
-                              );
+                              await openSourceOriginal(source);
                             } catch (e) {
                               setNotice((e as Error).message);
                             }
                           }}
                         >
-                          Open saved original
+                          {source.mime_type === "application/zip"
+                            ? "Download saved screenshots"
+                            : "Open saved original"}
                         </button>
                       )}
                       <Link to={base + "/imports"}>View document library</Link>

@@ -2,8 +2,13 @@ import { useState, useRef, useEffect } from "react";
 import { Upload, FileText, Plus, CheckCircle2 } from "lucide-react";
 import type { Workspace, Candidate, Resource } from "../shared/types";
 import { CATEGORIES } from "../shared/types";
-import { extract, hash, parseCSV, parseStatementText } from "./lib/importer";
-import { request } from "./lib/auth";
+import { hash, parseCSV, parseStatementText } from "./lib/importer";
+import { request, openSourceOriginal } from "./lib/auth";
+import {
+  validateSelection,
+  originalForSelection,
+  extractSelection,
+} from "./lib/importBatch";
 import { d, today } from "../shared/finance";
 import { WealthReview } from "./WealthReview";
 import { wealthImportSchema } from "../shared/validation";
@@ -30,6 +35,7 @@ export function ImportPage({
     [],
   );
   const [file, setFile] = useState<File | null>(null),
+    [selectedFiles, setSelectedFiles] = useState<File[]>([]),
     [text, setText] = useState(""),
     [rows, setRows] = useState<Candidate[]>([]),
     [account, setAccount] = useState(
@@ -45,8 +51,15 @@ export function ImportPage({
     if (!w.accounts.some((a) => a.id === account && !a.archived))
       setAccount(w.accounts.find((a) => !a.archived)?.id ?? "");
   }, [w.accounts, account]);
-  async function read(f: File, password = pdfPassword) {
-    setFile(f);
+  async function read(files: File[], password = pdfPassword) {
+    try {
+      validateSelection(files);
+    } catch (e) {
+      setStatus((e as Error).message);
+      return;
+    }
+    setSelectedFiles(files);
+    setFile(null);
     setSaved(false);
     setRows([]);
     setText("");
@@ -54,8 +67,12 @@ export function ImportPage({
     setStatus("Reading file…");
     readCancel.current = new AbortController();
     try {
-      const result = await extract(
-        f,
+      const original = await originalForSelection(files);
+      if (readCancel.current.signal.aborted)
+        throw Error("Screenshot reading cancelled.");
+      setFile(original);
+      const result = await extractSelection(
+        files,
         setStatus,
         readCancel.current.signal,
         password,
@@ -74,11 +91,15 @@ export function ImportPage({
         }),
       );
       setStatus(
-        "warning" in result && result.warning
-          ? result.warning
-          : result.rows.length
-            ? "Review all extracted rows before posting."
-            : "Text extracted. Review it below and create verified records; nothing has been posted.",
+        (files.length > 1 ? files.length + " screenshots combined. " : "") +
+          (result.overlaps
+            ? result.overlaps + " possible overlapping rows left unchecked. "
+            : "") +
+          ("warning" in result && result.warning
+            ? result.warning
+            : result.rows.length
+              ? "Review all extracted rows before posting."
+              : "Text extracted. Review it below and create verified records; nothing has been posted."),
       );
     } catch (e) {
       setStatus((e as Error).message);
@@ -115,7 +136,11 @@ export function ImportPage({
       });
       if (!upload.ok) throw Error("Original upload failed");
       await request("/documents/" + id + "/confirm", "POST");
-      return " Original saved privately.";
+      return selectedFiles.length > 1
+        ? " All " +
+            selectedFiles.length +
+            " originals saved privately in one archive."
+        : " Original saved privately.";
     } catch {
       return " Records saved, but original upload failed. Use Save document again to retry.";
     }
@@ -138,7 +163,11 @@ export function ImportPage({
       const extra = await retainOriginal(result.source_id);
       setSaved(true);
       await refresh();
-      setStatus("Document and extracted text saved." + extra);
+      setStatus(
+        (selectedFiles.length > 1
+          ? selectedFiles.length + " screenshots and combined text saved."
+          : "Document and extracted text saved.") + extra,
+      );
     } catch (e) {
       setStatus((e as Error).message);
     } finally {
@@ -235,8 +264,8 @@ export function ImportPage({
           <span className="pill">LESS TYPING. MORE CLARITY.</span>
           <h2>Bring your records together</h2>
           <p className="muted">
-            CSV, bank statement PDFs, and investment screenshots. Extraction
-            runs in your browser.
+            CSV, bank statement PDFs, and up to six screenshots together.
+            Extraction runs in your browser.
           </p>
           <label>
             Document purpose
@@ -255,23 +284,47 @@ export function ImportPage({
           <label className="dropzone">
             <Upload size={32} />
             <strong>
-              {busy ? "Reading your document…" : "Choose a document"}
+              {busy
+                ? "Reading your document…"
+                : "Choose a document or up to 6 screenshots"}
             </strong>
-            <span>PDF, CSV, PNG or JPEG · up to 20 MB</span>
+            <span>One PDF/CSV or up to 6 PNG/JPEG images · 20 MB total</span>
             <input
               type="file"
+              multiple
               accept=".csv,.pdf,image/png,image/jpeg"
               disabled={busy}
               onChange={(e) => {
                 setPdfPassword("");
-                if (e.target.files?.[0]) void read(e.target.files[0], "");
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                if (files.length) void read(files, "");
               }}
             />
           </label>
-          {file && (
-            <p>
-              <FileText size={15} /> {file.name}
-            </p>
+          {!!selectedFiles.length && (
+            <div>
+              <p>
+                <FileText size={15} />
+                {selectedFiles.length > 1
+                  ? selectedFiles.length + " screenshots selected"
+                  : selectedFiles[0].name}
+              </p>
+              {selectedFiles.length > 1 && (
+                <>
+                  <ol>
+                    {selectedFiles.map((f, i) => (
+                      <li key={i}>{f.name}</li>
+                    ))}
+                  </ol>
+                  <p className="muted small">
+                    Screenshots are read in selection order into one review. All
+                    originals are saved together as a ZIP archive. Check
+                    overlapping content before saving records.
+                  </p>
+                </>
+              )}
+            </div>
           )}
           {file?.type === "application/pdf" && (
             <>
@@ -287,7 +340,7 @@ export function ImportPage({
               <button
                 className="secondary"
                 disabled={busy}
-                onClick={() => read(file)}
+                onClick={() => read(selectedFiles)}
               >
                 Read PDF with this password
               </button>
@@ -316,14 +369,18 @@ export function ImportPage({
                   checked={retain}
                   onChange={(e) => setRetain(e.target.checked)}
                 />{" "}
-                Save the original in private cloud storage
+                {selectedFiles.length > 1
+                  ? "Save all originals together in private cloud storage"
+                  : "Save the original in private cloud storage"}
               </label>
               <button disabled={busy} onClick={saveDocument}>
                 {busy
                   ? "Working…"
                   : saved
                     ? "Save document again / retry original"
-                    : "Save document"}
+                    : selectedFiles.length > 1
+                      ? "Save " + selectedFiles.length + " screenshots"
+                      : "Save document"}
               </button>
               <p className="muted small">
                 Saving the document keeps it in your library. Save reviewed
@@ -431,7 +488,9 @@ export function ImportPage({
       )}
       {text && type !== "statement" && (
         <WealthReview
-          key={(file?.name ?? "") + type}
+          key={
+            selectedFiles.map((f) => f.name + f.lastModified).join("|") + type
+          }
           text={text}
           purpose={type}
           w={w}
@@ -551,20 +610,22 @@ export function ImportPage({
               </thead>
               <tbody>
                 {rows.map((r, i) => {
-                  const duplicate = w.entries.some(
-                    (e) =>
-                      e.account_id === account &&
-                      e.occurred_on === r.date &&
-                      e.merchant.trim().toLowerCase() ===
-                        r.description.trim().toLowerCase() &&
-                      (() => {
-                        try {
-                          return d(e.amount).eq(r.amount);
-                        } catch {
-                          return false;
-                        }
-                      })(),
-                  );
+                  const duplicate =
+                    r.duplicate ||
+                    w.entries.some(
+                      (e) =>
+                        e.account_id === account &&
+                        e.occurred_on === r.date &&
+                        e.merchant.trim().toLowerCase() ===
+                          r.description.trim().toLowerCase() &&
+                        (() => {
+                          try {
+                            return d(e.amount).eq(r.amount);
+                          } catch {
+                            return false;
+                          }
+                        })(),
+                    );
                   return (
                     <tr key={r.line}>
                       <td>
@@ -745,16 +806,15 @@ export function ImportPage({
                 className="secondary"
                 onClick={async () => {
                   try {
-                    const { url } = await request<{ url: string }>(
-                      "/documents/" + s.id + "/url",
-                    );
-                    window.open(url, "_blank", "noopener,noreferrer");
+                    await openSourceOriginal(s);
                   } catch (e) {
                     notify((e as Error).message);
                   }
                 }}
               >
-                Open saved original
+                {s.mime_type === "application/zip"
+                  ? "Download saved screenshots"
+                  : "Open saved original"}
               </button>
             )}
           </div>
@@ -780,10 +840,10 @@ export function ImportPage({
                 className="secondary"
                 onClick={async () => {
                   try {
-                    const { url } = await request<{ url: string }>(
-                      "/documents/" + j.source_document_id + "/url",
+                    const source = w.sources.find(
+                      (s) => s.id === j.source_document_id,
                     );
-                    window.open(url, "_blank", "noopener,noreferrer");
+                    if (source) await openSourceOriginal(source);
                   } catch (e) {
                     notify((e as Error).message);
                   }

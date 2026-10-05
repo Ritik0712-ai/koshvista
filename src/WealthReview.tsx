@@ -164,6 +164,17 @@ export function WealthReview({
     const r = wealthCandidates(text, purpose, w.profile.currency);
     return r.length ? r : [blank()];
   });
+  const repeatedRows = rows.filter(
+    (row, i) =>
+      row.name &&
+      rows
+        .slice(0, i)
+        .some(
+          (previous) =>
+            JSON.stringify(Object.entries(previous).sort()) ===
+            JSON.stringify(Object.entries(row).sort()),
+        ),
+  ).length;
   const [verified, setVerified] = useState(false);
   const [error, setError] = useState("");
   const update = (i: number, k: string, v: string) => {
@@ -352,6 +363,12 @@ export function WealthReview({
           Read edited source text again
         </button>
       </div>
+      {!!repeatedRows && (
+        <p role="alert" className="error">
+          {repeatedRows} repeated records may come from overlapping screenshots.
+          Remove the repeated record or correct its details before saving.
+        </p>
+      )}
       <label className="checkbox-label">
         <input
           type="checkbox"
@@ -361,7 +378,7 @@ export function WealthReview({
         I checked these dates, quantities and amounts against my document.
       </label>
       <button
-        disabled={busy || !verified || !rows.length}
+        disabled={busy || !verified || !rows.length || !!repeatedRows}
         onClick={async () => {
           setError("");
           try {
