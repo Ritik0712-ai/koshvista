@@ -90,6 +90,60 @@ describe("Financial invariants", () => {
     expect(holdings(w)[0].cost).toBeNull();
     expect(netWorth(w).toString()).toBe("150");
   });
+  it("uses dated snapshots and recorded order for same-day investment cost", () => {
+    const w = structuredClone(EMPTY);
+    w.instruments = [
+      {
+        id: "i",
+        name: "QA fund",
+        symbol: "",
+        asset_class: "ETF",
+        currency: "INR",
+      },
+    ];
+    w.trades = [
+      {
+        id: "z",
+        instrument_id: "i",
+        account_id: null,
+        traded_on: "2026-02-01",
+        kind: "buy",
+        quantity: "10",
+        unit_price: "10",
+        fees: "0",
+        linked_transaction_id: null,
+        created_at: "2026-02-01T10:00:00.000Z",
+      },
+      {
+        id: "a",
+        instrument_id: "i",
+        account_id: null,
+        traded_on: "2026-02-01",
+        kind: "sell",
+        quantity: "2",
+        unit_price: "20",
+        fees: "0",
+        linked_transaction_id: null,
+        created_at: "2026-02-01T10:01:00.000Z",
+      },
+    ];
+    w.snapshots = [
+      {
+        id: "future",
+        instrument_id: "i",
+        as_of: "2026-03-01",
+        quantity: "8",
+        market_value: "200",
+        cost_basis: "80",
+        source: "QA",
+      },
+    ];
+    const h = holdings(w, "2026-02-02")[0];
+    expect(h.quantity.toString()).toBe("8");
+    expect(h.cost?.toString()).toBe("80");
+    expect(h.realised.toString()).toBe("20");
+    expect(h.value).toBeNull();
+  });
   it("calculates FD projection without recording income", () => {
     const w = structuredClone(EMPTY);
     w.fixed_income = [

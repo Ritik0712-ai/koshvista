@@ -12,9 +12,16 @@ export const date = z
   );
 export const amount = z
   .string()
-  .regex(
-    /^-?\d{1,15}(\.\d{1,4})?$/,
-    "Use a decimal amount, up to four decimal places",
+  .transform((s) =>
+    s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s,
+  )
+  .pipe(
+    z
+      .string()
+      .regex(
+        /^-?\d{1,15}(\.\d{1,4})?$/,
+        "Use a decimal amount, up to four decimal places",
+      ),
   );
 const positive = amount.refine(
   (s) => new Decimal(s).gt(0),
@@ -140,14 +147,17 @@ export const transferSchema = z
     idempotency_key: uuid,
   })
   .refine((v) => v.from_id !== v.to_id, "Choose two different accounts");
+export const documentSchema = z.object({
+  name: text.min(1),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  mime_type: text,
+  byte_size: z.number().int().min(1).max(20000000),
+  extracted_text: z.string().max(100000).default(""),
+  purpose: z.enum(["statement", "portfolio", "fixed"]).default("statement"),
+});
 export const importSchema = z.object({
   account_id: uuid,
-  source: z.object({
-    name: text.min(1),
-    sha256: z.string().regex(/^[a-f0-9]{64}$/),
-    mime_type: text,
-    byte_size: z.number().int().min(1).max(20000000),
-  }),
+  source: documentSchema,
   rows: z
     .array(
       z.object({
@@ -161,6 +171,28 @@ export const importSchema = z.object({
     .min(1)
     .max(3000),
 });
+export const wealthImportSchema = z
+  .object({
+    source: documentSchema,
+    holdings: z
+      .array(
+        z.object({
+          instrument_id: uuid.nullable(),
+          instrument: schemas.instruments,
+          as_of: date,
+          quantity: qty,
+          market_value: nonnegative,
+          cost_basis: nonnegative.nullable(),
+        }),
+      )
+      .max(100)
+      .default([]),
+    deposits: z.array(schemas.fixed_income).max(100).default([]),
+  })
+  .refine(
+    (b) => b.holdings.length + b.deposits.length > 0,
+    "Review at least one record before saving",
+  );
 export function validatedEntry(v: z.infer<typeof schemas.entries>) {
   if (v.kind === "expense" && new Decimal(v.amount).gte(0))
     throw new z.ZodError([

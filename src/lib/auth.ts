@@ -11,10 +11,7 @@ export async function request<T = unknown>(
   // Neon injects its API JWT into the managed getSession response.
   const session = await auth.getSession();
   const token = session.data?.session?.token;
-  if (!token) {
-    console.warn("Sign-in diagnostic", { sessionPresent: !!session.data?.session, userPresent: !!session.data?.user, error: session.error?.message, fields: session.data?.session ? Object.keys(session.data.session) : [] });
-    throw new Error("Please sign in again.");
-  }
+  if (!token) throw new Error("Please sign in again.");
   const r = await fetch((import.meta.env.VITE_API_URL ?? "") + "/api" + path, {
     method,
     headers: {

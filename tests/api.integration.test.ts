@@ -147,6 +147,232 @@ describe.runIf(enabled)(
     }, 30000);
     it("rejects invalid resource names without SQL execution", async () =>
       expect((await call("/data/toString", "POST", {})).status).toBe(404));
+    it("settles a funded FD once and keeps principal out of income", async () => {
+      const body = {
+        name: "QA deposit",
+        kind: "fd",
+        issuer: "Fixture",
+        principal: "100",
+        currency: "INR",
+        annual_rate: "8",
+        start_on: "2026-01-01",
+        maturity_on: "2027-01-01",
+        compounding: 4,
+        payout: "cumulative",
+        status: "active",
+        note: "",
+        funding_account_id: account,
+        idempotency_key: randomUUID(),
+      };
+      const opened = await call("/fixed-income/open", "POST", body);
+      expect(opened.status).toBe(201);
+      const id = opened.data.id;
+      expect((await call("/fixed-income/open", "POST", body)).data.id).toBe(id);
+      expect(
+        (
+          await call("/data/fixed_income/" + id, "PATCH", {
+            ...body,
+            status: "closed",
+          })
+        ).status,
+      ).toBe(422);
+      const payout = {
+        account_id: account,
+        amount: "108",
+        occurred_on: "2026-09-01",
+      };
+      expect(
+        (await call("/fixed-income/" + id + "/settle", "POST", payout)).status,
+      ).toBe(200);
+      expect(
+        (await call("/fixed-income/" + id + "/settle", "POST", payout)).status,
+      ).toBe(409);
+      const state = (await call("/state")).data;
+      expect(state.fixed_income.find((f: any) => f.id === id).settled_on).toBe(
+        "2026-09-01",
+      );
+      const interest = state.entries.filter(
+        (e: any) => e.idempotency_key === `maturity:${id}:interest`,
+      );
+      expect(interest).toHaveLength(1);
+      expect(Number(interest[0].amount)).toBe(8);
+      expect(interest[0].kind).toBe("income");
+    }, 30000);
+    it("orders same-day trades, rejects overselling and reverses cash together", async () => {
+      const instrument = (
+        await call("/data/instruments", "POST", {
+          name: "QA fund",
+          symbol: "QA",
+          asset_class: "ETF",
+          currency: "INR",
+        })
+      ).data.id;
+      const trade = {
+        instrument_id: instrument,
+        account_id: account,
+        traded_on: "2026-02-03",
+        kind: "buy",
+        quantity: "10",
+        unit_price: "20",
+        fees: "1",
+        idempotency_key: randomUUID(),
+      };
+      const buy = await call("/data/trades", "POST", trade);
+      expect(buy.status).toBe(201);
+      expect((await call("/data/trades", "POST", trade)).data.id).toBe(
+        buy.data.id,
+      );
+      const sell = await call("/data/trades", "POST", {
+        ...trade,
+        kind: "sell",
+        quantity: "3",
+        idempotency_key: randomUUID(),
+      });
+      expect(sell.status).toBe(201);
+      expect(
+        (
+          await call("/data/trades", "POST", {
+            ...trade,
+            kind: "sell",
+            quantity: "8",
+            idempotency_key: randomUUID(),
+          })
+        ).status,
+      ).toBe(422);
+      expect((await call("/data/trades/" + buy.data.id, "DELETE")).status).toBe(
+        422,
+      );
+      expect(
+        (await call("/data/trades/" + sell.data.id, "DELETE")).status,
+      ).toBe(200);
+      const state = (await call("/state")).data;
+      expect(
+        state.entries.some(
+          (e: any) => e.id === sell.data.linked_transaction_id,
+        ),
+      ).toBe(false);
+      expect((await call("/data/trades/" + buy.data.id, "DELETE")).status).toBe(
+        200,
+      );
+    }, 30000);
+    it("permits a sale backed by a documented earlier snapshot", async () => {
+      const instrument = (
+        await call("/data/instruments", "POST", {
+          name: "QA snapshot fund",
+          symbol: "QS",
+          asset_class: "ETF",
+          currency: "INR",
+        })
+      ).data.id;
+      await call("/data/snapshots", "POST", {
+        instrument_id: instrument,
+        as_of: "2026-02-01",
+        quantity: "10",
+        market_value: "100",
+        cost_basis: null,
+        source: "QA",
+      });
+      const sale = await call("/data/trades", "POST", {
+        instrument_id: instrument,
+        account_id: null,
+        traded_on: "2026-02-02",
+        kind: "sell",
+        quantity: "3",
+        unit_price: "10",
+        fees: "0",
+        idempotency_key: randomUUID(),
+      });
+      expect(sale.status).toBe(201);
+    }, 30000);
+    it("saves document text and portfolio holdings exactly once", async () => {
+      const source = {
+        name: "QA-portfolio.csv",
+        sha256: "b".repeat(64),
+        mime_type: "text/csv",
+        byte_size: 100,
+        extracted_text: "Name,Quantity,Value",
+        purpose: "portfolio",
+      };
+      const document = await call("/documents", "POST", source);
+      expect(document.status).toBe(201);
+      const body = {
+        source,
+        holdings: [
+          {
+            instrument_id: null,
+            instrument: {
+              name: "Imported QA fund",
+              symbol: "IQ",
+              asset_class: "ETF",
+              currency: "INR",
+            },
+            as_of: "2026-02-05",
+            quantity: "4",
+            market_value: "80",
+            cost_basis: null,
+          },
+        ],
+        deposits: [],
+      };
+      expect((await call("/import/wealth", "POST", body)).data.posted).toBe(1);
+      expect((await call("/import/wealth", "POST", body)).data.duplicate).toBe(
+        true,
+      );
+      const state = (await call("/state")).data;
+      const saved = state.sources.find(
+        (s: any) => s.id === document.data.source_id,
+      );
+      expect(saved.extracted_text).toBe(source.extracted_text);
+      expect(saved.records_count).toBe(1);
+      expect(
+        (await call("/documents/" + saved.id + "/url", "GET", undefined, other))
+          .status,
+      ).toBe(404);
+    }, 30000);
+    it.runIf(!!process.env.AWS_ACCESS_KEY_ID)(
+      "retains and retrieves a private original with browser CORS",
+      async () => {
+        const original = "Synthetic document for automated verification";
+        const saved = await call("/documents", "POST", {
+          name: "QA-original.txt",
+          sha256: "c".repeat(64),
+          mime_type: "text/plain",
+          byte_size: new TextEncoder().encode(original).length,
+          extracted_text: original,
+          purpose: "statement",
+        });
+        const id = saved.data.source_id;
+        const url = (await call("/documents/" + id + "/upload-url", "POST"))
+          .data.url;
+        const preflight = await fetch(url, {
+          method: "OPTIONS",
+          headers: {
+            Origin: "https://koshvista.vercel.app",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "content-type",
+          },
+        });
+        expect(preflight.ok).toBe(true);
+        expect(["*", "https://koshvista.vercel.app"]).toContain(
+          preflight.headers.get("access-control-allow-origin"),
+        );
+        expect(
+          (
+            await fetch(url, {
+              method: "PUT",
+              headers: { "Content-Type": "text/plain" },
+              body: original,
+            })
+          ).ok,
+        ).toBe(true);
+        expect(
+          (await call("/documents/" + id + "/confirm", "POST")).status,
+        ).toBe(200);
+        const read = (await call("/documents/" + id + "/url")).data.url;
+        expect(await (await fetch(read)).text()).toBe(original);
+      },
+      30000,
+    );
     it("round trips imported entries, paired transfers, profiles and receipts", async () => {
       const original = (await call("/state")).data;
       await call("/workspace", "DELETE", { confirmation: "DELETE MY DATA" });
@@ -155,7 +381,7 @@ describe.runIf(enabled)(
         owner,
         data: original,
       });
-      expect(restored.status).toBe(200);
+      expect(restored.status, JSON.stringify(restored.data)).toBe(200);
       const after = (await call("/state")).data;
       expect(after.entries).toHaveLength(original.entries.length);
       expect(after.imports).toHaveLength(original.imports.length);

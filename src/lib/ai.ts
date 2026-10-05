@@ -10,8 +10,22 @@ export function suggestCategories(
       const worker = new Worker(new URL("./ai.worker.ts", import.meta.url), {
         type: "module",
       });
-      const stop = () => {
+      progress("Starting local AI. The first run downloads a category model…");
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(
+          Error(
+            "AI processing timed out after five minutes. Check your connection and try again; your rows are still editable.",
+          ),
+        );
+      }, 300000);
+      const cleanup = () => {
+        clearTimeout(timer);
         worker.terminate();
+        signal?.removeEventListener("abort", stop);
+      };
+      const stop = () => {
+        cleanup();
         reject(
           Error("AI suggestions cancelled. Your reviewed rows are unchanged."),
         );
@@ -20,19 +34,20 @@ export function suggestCategories(
       worker.onmessage = (e) => {
         if (e.data.status) progress(e.data.status);
         if (e.data.error || e.data.results) {
-          worker.terminate();
-          signal?.removeEventListener("abort", stop);
+          cleanup();
           e.data.error
             ? reject(
                 Error(
-                  "Local AI could not run on this device. Use the editable categories instead.",
+                  "Local AI failed: " +
+                    String(e.data.error).slice(0, 250) +
+                    ". You can edit the categories or retry.",
                 ),
               )
             : resolve(e.data.results);
         }
       };
       worker.onerror = () => {
-        worker.terminate();
+        cleanup();
         reject(
           Error(
             "Local AI could not load. Try a supported browser or edit categories manually.",

@@ -1,6 +1,8 @@
 import Papa from "papaparse";
 import { categoryGuess, d } from "../../shared/finance";
 import type { Candidate } from "../../shared/types";
+import ocrWorkerURL from "tesseract.js/dist/worker.min.js?url";
+import ocrCoreURL from "tesseract.js-core/tesseract-core-lstm.wasm.js?url";
 function parseDate(raw: string) {
   const s = raw.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
@@ -67,52 +69,102 @@ export function parseCSV(text: string): Candidate[] {
     }
   });
 }
-export async function extract(file: File, onProgress: (s: string) => void) {
+export async function extract(
+  file: File,
+  onProgress: (s: string) => void,
+  signal?: AbortSignal,
+) {
   if (file.size > 20000000)
     throw new Error("Choose a file smaller than 20 MB.");
   if (file.name.toLowerCase().endsWith(".csv"))
     return { text: await file.text(), rows: parseCSV(await file.text()) };
   let text = "";
-  if (file.type === "application/pdf") {
-    onProgress("Reading PDF pages…");
-    const pdf = await import("pdfjs-dist");
-    pdf.GlobalWorkerOptions.workerSrc = new URL(
-      "pdfjs-dist/build/pdf.worker.min.mjs",
-      import.meta.url,
-    ).href;
-    const task = pdf.getDocument({ data: await file.arrayBuffer() });
-    const doc = await task.promise;
-    if (doc.numPages > 100)
-      throw new Error("Split this PDF into files of up to 100 pages.");
-    for (let n = 1; n <= doc.numPages; n++) {
-      const page = await doc.getPage(n),
-        content = await page.getTextContent();
-      text +=
-        content.items
-          .map((i) =>
-            "str" in i ? i.str + ("hasEOL" in i && i.hasEOL ? "\n" : " ") : "",
-          )
-          .join("") + "\n";
-    }
-    await task.destroy();
-    if (!text.trim())
-      throw new Error(
-        "This PDF contains scanned pages. Upload images of the pages for OCR.",
+  const check = () => {
+    if (signal?.aborted)
+      throw Error(
+        "Document reading cancelled. You can still save the original or choose another file.",
       );
-  } else if (file.type.startsWith("image/")) {
-    onProgress("Reading image on your device…");
+  };
+  let worker:
+    | Awaited<ReturnType<(typeof import("tesseract.js"))["createWorker"]>>
+    | undefined;
+  const terminate = () => {
+    void worker?.terminate();
+  };
+  signal?.addEventListener("abort", terminate, { once: true });
+  const recognise = async (image: File | HTMLCanvasElement) => {
+    check();
     const { createWorker } = await import("tesseract.js");
-    const worker = await createWorker("eng", 1, {
+    worker ??= await createWorker("eng", 1, {
+      workerPath: ocrWorkerURL,
+      corePath: ocrCoreURL,
+      workerBlobURL: false,
       logger: (m) =>
-        onProgress(m.status + " " + Math.round(m.progress * 100) + "%"),
+        onProgress(m.status + " " + Math.round((m.progress ?? 0) * 100) + "%"),
     });
-    try {
-      text = (await worker.recognize(file)).data.text;
-    } finally {
-      await worker.terminate();
-    }
-  } else throw new Error("Choose a CSV, PDF, PNG or JPEG.");
-  return { text, rows: parseStatementText(text) };
+    check();
+    return (await worker.recognize(image)).data.text;
+  };
+  try {
+    if (file.type === "application/pdf") {
+      onProgress("Reading PDF pages…");
+      const pdf = await import("pdfjs-dist");
+      pdf.GlobalWorkerOptions.workerSrc = new URL(
+        "pdfjs-dist/build/pdf.worker.min.mjs",
+        import.meta.url,
+      ).href;
+      const task = pdf.getDocument({ data: await file.arrayBuffer() });
+      const doc = await task.promise;
+      if (doc.numPages > 100)
+        throw new Error("Split this PDF into files of up to 100 pages.");
+      let scanned = 0;
+      try {
+        for (let n = 1; n <= doc.numPages; n++) {
+          check();
+          onProgress("Reading page " + n + " / " + doc.numPages + "…");
+          const page = await doc.getPage(n),
+            content = await page.getTextContent();
+          const pageText = content.items
+            .map((i) =>
+              "str" in i
+                ? i.str + ("hasEOL" in i && i.hasEOL ? "\n" : " ")
+                : "",
+            )
+            .join("");
+          if (pageText.trim().length >= 15) text += pageText + "\n";
+          else {
+            if (++scanned > 10)
+              throw Error(
+                "This document has more than 10 scanned pages. Split it into smaller PDFs for OCR.",
+              );
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.ceil(viewport.width);
+            canvas.height = Math.ceil(viewport.height);
+            await page.render({
+              canvas,
+              canvasContext: canvas.getContext("2d")!,
+              viewport,
+            }).promise;
+            onProgress("Reading scanned page " + n + " on your device…");
+            text += (await recognise(canvas)) + "\n";
+            canvas.width = canvas.height = 0;
+          }
+          page.cleanup();
+        }
+      } finally {
+        await task.destroy();
+      }
+    } else if (file.type.startsWith("image/")) {
+      onProgress("Reading image on your device…");
+      text = await recognise(file);
+    } else throw new Error("Choose a CSV, PDF, PNG or JPEG.");
+    check();
+    return { text, rows: parseStatementText(text) };
+  } finally {
+    signal?.removeEventListener("abort", terminate);
+    await worker?.terminate();
+  }
 }
 export async function hash(file: File) {
   return Array.from(

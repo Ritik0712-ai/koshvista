@@ -9,7 +9,15 @@ let classifier: ZeroShotClassificationPipeline | undefined;
 const createClassifier = pipeline as unknown as (
   task: "zero-shot-classification",
   model: string,
-  options: { dtype: "q8"; device: "wasm" },
+  options: {
+    dtype: "q8";
+    device: "wasm";
+    progress_callback: (p: {
+      status: string;
+      file?: string;
+      progress?: number;
+    }) => void;
+  },
 ) => Promise<ZeroShotClassificationPipeline>;
 self.onmessage = async (
   e: MessageEvent<{
@@ -22,7 +30,21 @@ self.onmessage = async (
     classifier ??= await createClassifier(
       "zero-shot-classification",
       "Xenova/mobilebert-uncased-mnli",
-      { dtype: "q8", device: "wasm" },
+      {
+        dtype: "q8",
+        device: "wasm",
+        progress_callback: (p) =>
+          self.postMessage({
+            status:
+              p.status === "progress"
+                ? "Downloading category model: " +
+                  Math.round(p.progress ?? 0) +
+                  "% (" +
+                  (p.file ?? "model") +
+                  ")"
+                : "Preparing local AI: " + p.status,
+          }),
+      },
     );
     const results = [];
     for (let i = 0; i < e.data.rows.length; i++) {

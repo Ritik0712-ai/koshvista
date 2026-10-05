@@ -17,6 +17,8 @@ import {
   schemas,
   transferSchema,
   importSchema,
+  documentSchema,
+  wealthImportSchema,
   validatedEntry,
   amount,
   date,
@@ -210,6 +212,87 @@ app.post("/api/transfers", async (c) => {
     201,
   );
 });
+async function saveSource(
+  db: PoolClient,
+  owner: string,
+  source: z.infer<typeof documentSchema>,
+) {
+  await profile(db, owner);
+  return (
+    await db.query(
+      "INSERT INTO app.sources(owner_id,name,sha256,mime_type,byte_size,extracted_text,purpose) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,sha256) DO UPDATE SET extracted_text=EXCLUDED.extracted_text RETURNING *",
+      [
+        owner,
+        source.name,
+        source.sha256,
+        source.mime_type,
+        source.byte_size,
+        source.extracted_text,
+        source.purpose,
+      ],
+    )
+  ).rows[0];
+}
+app.post("/api/documents", async (c) => {
+  const source = documentSchema.parse(await c.req.json());
+  const owner = c.get("owner");
+  return c.json(
+    await tx(owner, async (db) => {
+      const row = await saveSource(db, owner, source);
+      await audit(db, owner, "save_document", "sources", row.id);
+      return { source_id: row.id, retained: !!row.storage_key };
+    }),
+    201,
+  );
+});
+app.post("/api/import/wealth", async (c) => {
+  const b = wealthImportSchema.parse(await c.req.json()),
+    owner = c.get("owner");
+  return c.json(
+    await tx(owner, async (db) => {
+      const source = await saveSource(db, owner, b.source);
+      // The upsert locks this document so concurrent retries cannot create duplicate holdings.
+      if (source.processed_at)
+        return { source_id: source.id, posted: 0, duplicate: true };
+      for (const h of b.holdings) {
+        const instrument = h.instrument_id
+          ? await getOwned(db, "instruments", owner, h.instrument_id, true)
+          : await insert(db, "instruments", owner, h.instrument);
+        if (instrument.currency !== h.instrument.currency)
+          throw new HTTPException(422, {
+            message: "The holding currency must match its instrument.",
+          });
+        await insert(db, "snapshots", owner, {
+          instrument_id: instrument.id,
+          as_of: h.as_of,
+          quantity: h.quantity,
+          market_value: h.market_value,
+          cost_basis: h.cost_basis,
+          source: "Document: " + source.name,
+        });
+      }
+      for (const f of b.deposits) {
+        if (f.status === "closed")
+          throw new HTTPException(422, {
+            message:
+              "Import active holdings; record actual settlement separately.",
+          });
+        await insert(db, "fixed_income", owner, {
+          ...f,
+          note: (f.note + "\nSource: " + source.name).trim(),
+        });
+      }
+      const posted = b.holdings.length + b.deposits.length;
+      await db.query(
+        "UPDATE app.sources SET processed_at=now(),records_count=$3 WHERE owner_id=$1 AND id=$2",
+        [owner, source.id, posted],
+      );
+      await audit(db, owner, "import_wealth", "sources", source.id);
+      return { source_id: source.id, posted, duplicate: false };
+    }),
+    201,
+  );
+});
 app.post("/api/import", async (c) => {
   const b = importSchema.parse(await c.req.json()),
     owner = c.get("owner");
@@ -218,17 +301,7 @@ app.post("/api/import", async (c) => {
       const account = await getOwned(db, "accounts", owner, b.account_id, true);
       if (account.archived)
         throw new HTTPException(422, { message: "Choose an active account." });
-      const sourceRows = await db.query(
-        "INSERT INTO app.sources(owner_id,name,sha256,mime_type,byte_size) VALUES($1,$2,$3,$4,$5) ON CONFLICT(owner_id,sha256) DO UPDATE SET name=app.sources.name RETURNING id",
-        [
-          owner,
-          b.source.name,
-          b.source.sha256,
-          b.source.mime_type,
-          b.source.byte_size,
-        ],
-      );
-      const source = sourceRows.rows[0].id;
+      const source = (await saveSource(db, owner, b.source)).id;
       let posted = 0;
       for (const row of b.rows) {
         // Preserve repeated same-day transactions in one statement using its stable source line.
@@ -390,8 +463,8 @@ app.post("/api/fixed-income/:id/settle", async (c) => {
           idempotency_key: "maturity:" + f.id + ":interest",
         });
       await db.query(
-        "UPDATE app.fixed_income SET status='closed' WHERE owner_id=$1 AND id=$2",
-        [owner, f.id],
+        "UPDATE app.fixed_income SET status='closed',settled_on=$3 WHERE owner_id=$1 AND id=$2",
+        [owner, f.id, b.occurred_on],
       );
       await audit(db, owner, "settle", "fixed_income", f.id);
       return { ok: true };
@@ -449,17 +522,34 @@ app.post("/api/data/:resource", async (c) => {
           String(body.instrument_id),
           true,
         );
-        const position = await db.query(
-          "SELECT coalesce(sum(CASE WHEN kind='buy' THEN quantity ELSE -quantity END),0)::text AS quantity FROM app.trades WHERE owner_id=$1 AND instrument_id=$2 AND traded_on<=$3",
+        const later = await db.query(
+          "SELECT id FROM app.trades WHERE owner_id=$1 AND instrument_id=$2 AND traded_on>$3 LIMIT 1",
           [owner, body.instrument_id, body.traded_on],
+        );
+        if (later.rowCount)
+          throw new HTTPException(422, {
+            message:
+              "Reverse later trades before inserting older history, so quantities remain consistent.",
+          });
+        const snapshot = (
+          await db.query(
+            "SELECT quantity,as_of FROM app.snapshots WHERE owner_id=$1 AND instrument_id=$2 AND as_of<$3 ORDER BY as_of DESC LIMIT 1",
+            [owner, body.instrument_id, body.traded_on],
+          )
+        ).rows[0];
+        const position = await db.query(
+          "SELECT coalesce(sum(CASE WHEN kind='buy' THEN quantity ELSE -quantity END),0)::text AS quantity FROM app.trades WHERE owner_id=$1 AND instrument_id=$2 AND traded_on<=$3 AND ($4::date IS NULL OR traded_on>$4)",
+          [owner, body.instrument_id, body.traded_on, snapshot?.as_of ?? null],
         );
         if (
           body.kind === "sell" &&
-          d(String(body.quantity)).gt(position.rows[0].quantity)
+          d(String(body.quantity)).gt(
+            d(position.rows[0].quantity).plus(snapshot?.quantity ?? 0),
+          )
         )
           throw new HTTPException(422, {
             message:
-              "Add documented purchase history before selling this quantity.",
+              "Sale exceeds your documented quantity. Add purchase history or an earlier dated holding snapshot.",
           });
         if (body.account_id) {
           const account = await getOwned(
@@ -549,6 +639,14 @@ app.patch("/api/data/:resource/:id", async (c) => {
       }
       if (
         resource === "fixed_income" &&
+        (old.status === "closed" || body.status !== old.status)
+      )
+        throw new HTTPException(422, {
+          message:
+            "Use Record payout to close a holding. Settled holdings cannot be reopened or edited.",
+        });
+      if (
+        resource === "fixed_income" &&
         old.funding_entry_id &&
         (!d(String(body.principal)).eq(old.principal) ||
           body.currency !== old.currency ||
@@ -613,8 +711,8 @@ app.delete("/api/data/:resource/:id", async (c) => {
       if (resource === "trades") {
         await getOwned(db, "instruments", owner, row.instrument_id, true);
         const later = await db.query(
-          "SELECT id FROM app.trades WHERE owner_id=$1 AND instrument_id=$2 AND id<>$3 AND traded_on>=$4 LIMIT 1",
-          [owner, row.instrument_id, id, row.traded_on],
+          "SELECT id FROM app.trades WHERE owner_id=$1 AND instrument_id=$2 AND (traded_on,created_at,id)>(SELECT traded_on,created_at,id FROM app.trades WHERE owner_id=$1 AND id=$3) LIMIT 1",
+          [owner, row.instrument_id, id],
         );
         if (later.rowCount)
           throw new HTTPException(422, {
@@ -813,6 +911,10 @@ app.post("/api/restore", async (c) => {
             kind: z.string().max(50),
             mime_type: z.string().max(200),
             byte_size: z.number().int().positive().max(20000000),
+            extracted_text: z.string().max(100000).default(""),
+            purpose: z.string().max(50).default("statement"),
+            processed_at: z.string().datetime().nullable().optional(),
+            records_count: z.number().int().nonnegative().default(0),
           }),
         )
         .parse(body.data.sources ?? []))
@@ -851,6 +953,7 @@ app.post("/api/restore", async (c) => {
           z.object({
             id: z.string().uuid(),
             funding_entry_id: z.string().uuid().nullable().optional(),
+            settled_on: date.nullable().optional(),
           }),
         )
         .parse(body.data.fixed_income ?? [])) {
@@ -859,12 +962,19 @@ app.post("/api/restore", async (c) => {
             "UPDATE app.fixed_income SET funding_entry_id=$3 WHERE owner_id=$1 AND id=$2",
             [owner, f.id, f.funding_entry_id],
           );
+        const settled = f.settled_on;
+        if (settled)
+          await db.query(
+            "UPDATE app.fixed_income SET settled_on=$3 WHERE owner_id=$1 AND id=$2",
+            [owner, f.id, settled],
+          );
       }
       for (const row of z
         .array(
           schemas.trades.extend({
             id: z.string().uuid(),
             linked_transaction_id: z.string().uuid().nullable(),
+            created_at: z.string().datetime().optional(),
           }),
         )
         .parse(body.data.trades ?? []))

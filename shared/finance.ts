@@ -80,17 +80,19 @@ export function fdValue(f: FixedIncome, on = f.maturity_on) {
           .pow(f.compounding * years),
       );
 }
-export function holdings(w: Workspace) {
+export function holdings(w: Workspace, on = today()) {
   return w.instruments.map((i) => {
     const snapshots = w.snapshots
-      .filter((s) => s.instrument_id === i.id)
+      .filter((s) => s.instrument_id === i.id && s.as_of <= on)
       .sort((a, b) => b.as_of.localeCompare(a.as_of));
     const snap = snapshots[0];
     const allTrades = w.trades
-      .filter((t) => t.instrument_id === i.id)
+      .filter((t) => t.instrument_id === i.id && t.traded_on <= on)
       .sort(
         (a, b) =>
-          a.traded_on.localeCompare(b.traded_on) || a.id.localeCompare(b.id),
+          a.traded_on.localeCompare(b.traded_on) ||
+          (a.created_at ?? "").localeCompare(b.created_at ?? "") ||
+          a.id.localeCompare(b.id),
       );
     const trades = snap
       ? allTrades.filter((t) => t.traded_on > snap.as_of)
@@ -131,15 +133,20 @@ export function holdings(w: Workspace) {
     };
   });
 }
-export function netWorth(w: Workspace, currency = "INR") {
+export function netWorth(w: Workspace, currency = "INR", on = today()) {
   const assets = w.accounts
     .filter((a) => a.currency === currency)
-    .reduce((s, a) => s.plus(balance(a, w.entries)), d(0));
-  const positions = holdings(w)
+    .reduce((s, a) => s.plus(balance(a, w.entries, on)), d(0));
+  const positions = holdings(w, on)
     .filter((h) => h.instrument.currency === currency)
     .reduce((s, h) => s.plus(h.value ?? h.cost ?? 0), d(0));
   const fixed = w.fixed_income
-    .filter((f) => f.currency === currency && f.status !== "closed")
+    .filter(
+      (f) =>
+        f.currency === currency &&
+        f.start_on <= on &&
+        (f.settled_on ? f.settled_on > on : f.status !== "closed"),
+    )
     .reduce((s, f) => s.plus(f.principal), d(0));
   return assets.plus(positions).plus(fixed);
 }

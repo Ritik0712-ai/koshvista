@@ -44,6 +44,7 @@ export interface Instrument {
 }
 export interface Trade {
   id: string;
+  created_at?: string;
   instrument_id: string;
   account_id: string | null;
   traded_on: string;
@@ -64,6 +65,7 @@ export interface Snapshot {
 }
 export interface FixedIncome {
   id: string;
+  settled_on?: string | null;
   funding_entry_id?: string | null;
   name: string;
   kind: "fd" | "bond";
@@ -105,6 +107,10 @@ export interface SourceDocument {
   byte_size: number;
   storage_key: string | null;
   created_at?: string;
+  extracted_text?: string;
+  purpose?: string;
+  processed_at?: string | null;
+  records_count?: number;
 }
 export interface ImportJob {
   id: string;
@@ -165,6 +171,7 @@ export interface Candidate {
   selected: boolean;
   duplicate: boolean;
   error?: string;
+  ai_score?: number;
 }
 export const CATEGORIES = [
   "Food & dining",

@@ -2,9 +2,11 @@ import { useState, useRef, useEffect } from "react";
 import { Upload, FileText, Plus, CheckCircle2 } from "lucide-react";
 import type { Workspace, Candidate, Resource } from "../shared/types";
 import { CATEGORIES } from "../shared/types";
-import { extract, hash, parseCSV } from "./lib/importer";
+import { extract, hash, parseCSV, parseStatementText } from "./lib/importer";
 import { request } from "./lib/auth";
 import { d, today } from "../shared/finance";
+import { WealthReview } from "./WealthReview";
+import { wealthImportSchema } from "../shared/validation";
 export function ImportPage({
   w,
   demo,
@@ -19,23 +21,33 @@ export function ImportPage({
   onAdd: (r: Resource) => void;
 }) {
   const aiCancel = useRef<AbortController | null>(null);
-  useEffect(() => () => aiCancel.current?.abort(), []);
+  const readCancel = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      aiCancel.current?.abort();
+      readCancel.current?.abort();
+    },
+    [],
+  );
   const [file, setFile] = useState<File | null>(null),
     [text, setText] = useState(""),
     [rows, setRows] = useState<Candidate[]>([]),
     [account, setAccount] = useState(w.accounts[0]?.id ?? ""),
     [busy, setBusy] = useState(false),
     [status, setStatus] = useState(""),
-    [retain, setRetain] = useState(false),
+    [retain, setRetain] = useState(true),
+    [saved, setSaved] = useState(false),
     [type, setType] = useState("statement");
   async function read(f: File) {
     setFile(f);
+    setSaved(false);
     setRows([]);
     setText("");
     setBusy(true);
     setStatus("Reading file…");
+    readCancel.current = new AbortController();
     try {
-      const result = await extract(f, setStatus);
+      const result = await extract(f, setStatus, readCancel.current.signal);
       setText(result.text);
       setRows(
         result.rows.map((r) => {
@@ -58,10 +70,101 @@ export function ImportPage({
       setStatus((e as Error).message);
     } finally {
       setBusy(false);
+      readCancel.current = null;
     }
   }
   const update = (i: number, key: keyof Candidate, value: unknown) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, [key]: value } : r)));
+  async function source() {
+    if (!file) throw Error("Choose a document first.");
+    return {
+      name: file.name.slice(0, 200),
+      sha256: await hash(file),
+      mime_type: file.type || "text/csv",
+      byte_size: file.size,
+      extracted_text: text.slice(0, 100000),
+      purpose: type,
+    };
+  }
+  async function retainOriginal(id: string) {
+    if (!file || !retain)
+      return " Extracted text saved; original not retained.";
+    try {
+      const { url } = await request<{ url: string }>(
+        "/documents/" + id + "/upload-url",
+        "POST",
+      );
+      const upload = await fetch(url, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "text/csv" },
+        body: file,
+      });
+      if (!upload.ok) throw Error("Original upload failed");
+      await request("/documents/" + id + "/confirm", "POST");
+      return " Original saved privately.";
+    } catch {
+      return " Records saved, but original upload failed. Use Save document again to retry.";
+    }
+  }
+  async function saveDocument() {
+    if (demo) {
+      setStatus(
+        "Sign in to save documents. This sample workspace previews extraction only.",
+      );
+      return;
+    }
+    setBusy(true);
+    setStatus("Saving your document…");
+    try {
+      const result = await request<{ source_id: string }>(
+        "/documents",
+        "POST",
+        await source(),
+      );
+      const extra = await retainOriginal(result.source_id);
+      setSaved(true);
+      await refresh();
+      setStatus("Document and extracted text saved." + extra);
+    } catch (e) {
+      setStatus((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function saveWealth(body: unknown) {
+    if (demo)
+      throw Error("Sign in to save these holdings to your private workspace.");
+    const payload = wealthImportSchema.parse({
+      ...(body as object),
+      source: await source(),
+    });
+    setBusy(true);
+    setStatus("Saving reviewed holdings…");
+    try {
+      const result = await request<{
+        source_id: string;
+        posted: number;
+        duplicate: boolean;
+      }>("/import/wealth", "POST", payload);
+      const extra = await retainOriginal(result.source_id);
+      setSaved(true);
+      await refresh();
+      setStatus(
+        (result.duplicate
+          ? "This document's holdings were already saved."
+          : result.posted +
+            " holdings saved to " +
+            (type === "portfolio" ? "Investments." : "FDs & bonds.")) + extra,
+      );
+      notify(
+        result.duplicate
+          ? "Duplicate prevented."
+          : "Holdings saved successfully.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
   async function post() {
     if (demo) {
       setStatus(
@@ -88,34 +191,11 @@ export function ImportPage({
         source_id: string;
       }>("/import", "POST", {
         account_id: account,
-        source: {
-          name: file.name,
-          sha256,
-          mime_type: file.type || "text/csv",
-          byte_size: file.size,
-        },
+        source: { ...(await source()), sha256 },
         rows: selected,
       });
-      let extra = "";
-      if (retain) {
-        try {
-          const { url } = await request<{ url: string }>(
-            "/documents/" + result.source_id + "/upload-url",
-            "POST",
-          );
-          const upload = await fetch(url, {
-            method: "PUT",
-            headers: { "Content-Type": file.type || "text/csv" },
-            body: file,
-          });
-          if (!upload.ok) throw Error("Upload failed");
-          await request("/documents/" + result.source_id + "/confirm", "POST");
-          extra = " Original retained privately.";
-        } catch {
-          extra =
-            " Original could not be retained. The transactions were saved.";
-        }
-      }
+      const extra = await retainOriginal(result.source_id);
+      setSaved(true);
       setRows([]);
       await refresh();
       setStatus(
@@ -144,7 +224,11 @@ export function ImportPage({
           </p>
           <label>
             Document purpose
-            <select value={type} onChange={(e) => setType(e.target.value)}>
+            <select
+              disabled={busy}
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+            >
               <option value="statement">Bank or cash statement</option>
               <option value="portfolio">
                 Portfolio screenshot / statement
@@ -174,6 +258,40 @@ export function ImportPage({
             {status ||
               "Your source document stays on this device unless you choose to retain it."}
           </p>
+          {busy && (readCancel.current || aiCancel.current) && (
+            <button
+              className="secondary"
+              onClick={() => {
+                readCancel.current?.abort();
+                aiCancel.current?.abort();
+              }}
+            >
+              Cancel processing
+            </button>
+          )}
+          {file && (
+            <>
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={retain}
+                  onChange={(e) => setRetain(e.target.checked)}
+                />{" "}
+                Save the original in private cloud storage
+              </label>
+              <button disabled={busy} onClick={saveDocument}>
+                {busy
+                  ? "Working…"
+                  : saved
+                    ? "Save document again / retry original"
+                    : "Save document"}
+              </button>
+              <p className="muted small">
+                Saving the document keeps it in your library. Save reviewed
+                records below to update your finances.
+              </p>
+            </>
+          )}
         </section>
         <section className="panel">
           <h2>A careful import, every time</h2>
@@ -237,6 +355,17 @@ export function ImportPage({
                 </button>
                 <button
                   className="secondary"
+                  onClick={() => {
+                    setRows(parseStatementText(text));
+                    setStatus(
+                      "Transaction candidates extracted. Check every amount and debit/credit direction before saving.",
+                    );
+                  }}
+                >
+                  Read transaction lines
+                </button>
+                <button
+                  className="secondary"
                   onClick={() =>
                     setRows((rs) => [
                       ...rs,
@@ -257,23 +386,29 @@ export function ImportPage({
                   Add verified row
                 </button>
               </>
-            ) : (
-              <button
-                onClick={() =>
-                  onAdd(type === "portfolio" ? "snapshots" : "fixed_income")
-                }
-              >
-                Create verified{" "}
-                {type === "portfolio" ? "valuation" : "FD / bond"}
-              </button>
-            )}
+            ) : null}
           </div>
         </section>
       )}
-      {rows.length > 0 && (
+      {text && type !== "statement" && (
+        <WealthReview
+          key={(file?.name ?? "") + type}
+          text={text}
+          purpose={type}
+          w={w}
+          busy={busy}
+          onSave={saveWealth}
+        />
+      )}
+      {type === "statement" && rows.length > 0 && (
         <section className="panel spaced">
           <div className="section-head">
             <h2>Review {rows.length} rows</h2>
+            {!w.accounts.some((a) => !a.archived) && (
+              <button onClick={() => onAdd("accounts")}>
+                Add destination account
+              </button>
+            )}
             <label>
               Destination account
               <select
@@ -308,13 +443,20 @@ export function ImportPage({
                   setRows((rs) =>
                     rs.map((r) => {
                       const s = suggestions.find((s) => s.line === r.line);
-                      return s && s.score >= 0.5
-                        ? { ...r, category: s.category, confidence: "review" }
+                      return s
+                        ? {
+                            ...r,
+                            category: s.category,
+                            confidence: "review",
+                            ai_score: s.score,
+                            selected: false,
+                          }
                         : r;
                     }),
                   );
                   setStatus(
-                    "Local AI suggestions added. Review them before posting; scores are not a guarantee of accuracy.",
+                    suggestions.length +
+                      " AI category suggestions added. Those rows are unselected until you review them. Scores are not a guarantee of accuracy.",
                   );
                 } catch (e) {
                   setStatus((e as Error).message);
@@ -338,6 +480,10 @@ export function ImportPage({
           <p className="muted small">
             Optional model download from Hugging Face; transaction descriptions
             stay on this device. Up to 50 uncategorised rows per run.
+          </p>
+          <p role="status" className="notice">
+            {status ||
+              "Choose Suggest to classify uncategorised descriptions. The first run downloads a model and can take several minutes."}
           </p>
           <p className="muted">
             Negative values decrease the account. Review transfers separately to
@@ -428,6 +574,12 @@ export function ImportPage({
                               ? "Check source"
                               : "Needs review"}
                         </span>
+                        {r.ai_score !== undefined && (
+                          <small>
+                            AI suggestion · {Math.round(r.ai_score * 100)}%
+                            model score · verify before saving
+                          </small>
+                        )}
                       </td>
                     </tr>
                   );
@@ -450,12 +602,70 @@ export function ImportPage({
             <CheckCircle2 size={17} />
             {busy
               ? "Saving…"
-              : "Post " +
+              : "Save " +
                 rows.filter((r) => r.selected).length +
                 " reviewed rows"}
           </button>
         </section>
       )}
+      <section className="panel spaced">
+        <h2>Saved document library</h2>
+        {!w.sources.length && (
+          <p className="muted">
+            Saved documents appear here, including uploads awaiting record
+            review.
+          </p>
+        )}
+        {w.sources.map((s) => (
+          <div className="account-line" key={s.id}>
+            <FileText size={20} />
+            <div>
+              <strong>{s.name}</strong>
+              <small>
+                {s.purpose ?? "statement"} ·{" "}
+                {s.storage_key
+                  ? "Original saved"
+                  : "Text / record reference saved"}
+                {s.processed_at
+                  ? " · " + s.records_count + " holdings saved"
+                  : ""}
+              </small>
+            </div>
+            {s.extracted_text && (
+              <details>
+                <summary>Read saved text</summary>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    maxWidth: 500,
+                    maxHeight: 250,
+                    overflow: "auto",
+                  }}
+                >
+                  {s.extracted_text}
+                </pre>
+              </details>
+            )}
+            {s.storage_key && (
+              <button
+                className="secondary"
+                onClick={async () => {
+                  try {
+                    const { url } = await request<{ url: string }>(
+                      "/documents/" + s.id + "/url",
+                    );
+                    window.open(url, "_blank", "noopener,noreferrer");
+                  } catch (e) {
+                    notify((e as Error).message);
+                  }
+                }}
+              >
+                Open saved original
+              </button>
+            )}
+          </div>
+        ))}
+      </section>
       <section className="panel spaced">
         <h2>Import history</h2>
         {w.imports.map((j) => (
