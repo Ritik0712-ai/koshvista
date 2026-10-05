@@ -3,8 +3,13 @@ import {
   env,
   type ZeroShotClassificationPipeline,
 } from "@huggingface/transformers";
+import ortModuleURL from "../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs?url";
+import ortWasmURL from "../../node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm?url";
 env.allowLocalModels = false;
-if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = 1;
+if (env.backends.onnx.wasm) {
+  env.backends.onnx.wasm.numThreads = 1;
+  env.backends.onnx.wasm.wasmPaths = { mjs: ortModuleURL, wasm: ortWasmURL };
+}
 let classifier: ZeroShotClassificationPipeline | undefined;
 const createClassifier = pipeline as unknown as (
   task: "zero-shot-classification",
