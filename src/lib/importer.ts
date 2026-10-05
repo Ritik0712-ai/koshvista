@@ -1,4 +1,5 @@
 import Papa from "papaparse";
+import { parseAxisStatement } from "./bankStatement";
 import { categoryGuess, d } from "../../shared/finance";
 import type { Candidate } from "../../shared/types";
 import ocrWorkerURL from "tesseract.js/dist/worker.min.js?url";
@@ -206,13 +207,26 @@ export async function extract(
           onProgress("Reading page " + n + " / " + doc.numPages + "…");
           const page = await doc.getPage(n),
             content = await page.getTextContent();
-          const pageText = content.items
-            .map((i) =>
-              "str" in i
-                ? i.str + ("hasEOL" in i && i.hasEOL ? "\n" : " ")
-                : "",
+          const items = content.items.filter((i) => "str" in i);
+          const grouped: Array<{ y: number; items: typeof items }> = [];
+          for (const item of items) {
+            const y = item.transform[5];
+            let line = grouped.find((l) => Math.abs(l.y - y) < 2);
+            if (!line) {
+              line = { y, items: [] };
+              grouped.push(line);
+            }
+            line.items.push(item);
+          }
+          const pageText = grouped
+            .sort((a, b) => b.y - a.y)
+            .map((line) =>
+              line.items
+                .sort((a, b) => a.transform[4] - b.transform[4])
+                .map((i) => i.str)
+                .join(" "),
             )
-            .join("");
+            .join("\n");
           if (pageText.trim().length >= 15) text += pageText + "\n";
           else {
             if (++scanned > 10)
@@ -259,6 +273,8 @@ export async function hash(file: File) {
 
 /** Conservative parser: every PDF/OCR candidate starts unchecked for review. */
 export function parseStatementText(text: string): Candidate[] {
+  const axis = parseAxisStatement(text);
+  if (axis) return axis.rows;
   return text.split(/\r?\n/).flatMap((line, index) => {
     const start = line
       .trim()

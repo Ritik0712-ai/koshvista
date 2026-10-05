@@ -14,7 +14,8 @@ import {
   originalForSelection,
   extractSelection,
 } from "./lib/importBatch";
-import { d, today } from "../shared/finance";
+import { d, today, formatMoney } from "../shared/finance";
+import { parseAxisStatement } from "./lib/bankStatement";
 import { WealthReview } from "./WealthReview";
 import { wealthImportSchema } from "../shared/validation";
 export function ImportPage({
@@ -52,7 +53,21 @@ export function ImportPage({
     [retain, setRetain] = useState(true),
     [saved, setSaved] = useState(false),
     [pdfPassword, setPdfPassword] = useState(""),
-    [type, setType] = useState("statement");
+    [type, setType] = useState("statement"),
+    [reviewPage, setReviewPage] = useState(0);
+  const bank = type === "statement" ? parseAxisStatement(text) : null;
+  const matchingBank = bank
+    ? w.accounts.find(
+        (a) =>
+          a.kind === "bank" &&
+          !a.archived &&
+          a.name.includes(bank.last4) &&
+          a.institution === bank.institution,
+      )
+    : undefined;
+  useEffect(() => {
+    if (matchingBank) setAccount(matchingBank.id);
+  }, [matchingBank?.id]);
   useEffect(() => {
     if (!w.accounts.some((a) => a.id === account && !a.archived))
       setAccount(w.accounts.find((a) => !a.archived)?.id ?? "");
@@ -64,6 +79,7 @@ export function ImportPage({
       setStatus((e as Error).message);
       return;
     }
+    setReviewPage(0);
     setSavedSource(null);
     setSelectedFiles(files);
     setFile(null);
@@ -125,6 +141,7 @@ export function ImportPage({
   }
   function reviewSaved(s: SourceDocument, purpose: string) {
     if (busy) return;
+    setReviewPage(0);
     setSavedSource(s);
     setFile(null);
     setSelectedFiles([]);
@@ -254,6 +271,34 @@ export function ImportPage({
       setBusy(false);
     }
   }
+  async function createStatementAccount() {
+    if (!bank?.reconciled) return;
+    if (demo) {
+      setStatus("Sign in to create the bank account from your statement.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await request<{ id: string }>("/data/accounts", "POST", {
+        name: bank.institution + " · " + bank.last4,
+        kind: "bank",
+        currency: bank.currency,
+        institution: bank.institution,
+        opening_balance: bank.opening_balance,
+        opening_date: bank.opening_on,
+        archived: false,
+      });
+      await refresh();
+      setAccount(result.id);
+      setStatus(
+        "Bank account created with the statement opening balance. Select the checked rows and save to import transactions.",
+      );
+    } catch (e) {
+      setStatus((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function post() {
     if (demo) {
       setStatus(
@@ -262,6 +307,32 @@ export function ImportPage({
       return;
     }
     if ((!file && !savedSource) || !account) return;
+    if (bank && !bank.reconciled) {
+      setStatus(
+        "The statement has not reconciled. Read the saved original again before posting.",
+      );
+      return;
+    }
+    const destination = w.accounts.find((a) => a.id === account);
+    if (bank && destination && destination.opening_date > bank.opening_on) {
+      setStatus(
+        "This account starts after the statement. Create the bank account with the documented opening balance, or correct its opening date and balance before importing.",
+      );
+      return;
+    }
+    if (
+      bank &&
+      rows.filter((r) => r.selected).length === bank.rows.length &&
+      !rows
+        .filter((r) => r.selected)
+        .reduce((sum, r) => sum.plus(r.amount), d(0))
+        .eq(d(bank.closing_balance).minus(bank.opening_balance))
+    ) {
+      setStatus(
+        "The edited amounts no longer match the statement closing balance. Correct them before saving.",
+      );
+      return;
+    }
     setBusy(true);
     try {
       const metadata = await source();
@@ -569,6 +640,51 @@ export function ImportPage({
           onSave={saveWealth}
         />
       )}
+      {bank && (
+        <section className="panel spaced">
+          <h2>Bank statement checks</h2>
+          <p>
+            {bank.institution} · account ending {bank.last4} · {bank.opening_on}{" "}
+            to {bank.closing_on}
+          </p>
+          <p>
+            {bank.rows.length} transactions · Opening{" "}
+            {formatMoney(bank.opening_balance || 0, bank.currency)} · Closing{" "}
+            {formatMoney(bank.closing_balance || 0, bank.currency)}
+          </p>
+          <p>
+            Debits {formatMoney(bank.total_debits, bank.currency)} · Credits{" "}
+            {formatMoney(bank.total_credits, bank.currency)}
+          </p>
+          <p role="status" className="notice">
+            {bank.reconciled
+              ? "Every transaction matches the running balance, and both totals match the statement."
+              : bank.issues.join(" ")}
+          </p>
+          {bank.reconciled && !matchingBank && (
+            <button disabled={busy} onClick={createStatementAccount}>
+              Create {bank.institution} account from statement
+            </button>
+          )}
+          <p className="muted">
+            Select the account that owns this statement. Possible own-account
+            movements are marked as adjustments and excluded from
+            income/spending until you classify them. Investment movements are
+            excluded from spending.
+          </p>
+          {bank.reconciled && (
+            <button
+              className="secondary"
+              disabled={busy}
+              onClick={() =>
+                setRows((rs) => rs.map((r) => ({ ...r, selected: true })))
+              }
+            >
+              Select all balance-checked rows
+            </button>
+          )}
+        </section>
+      )}
       {type === "statement" && rows.length > 0 && (
         <section className="panel spaced">
           <div className="section-head">
@@ -680,139 +796,167 @@ export function ImportPage({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r, i) => {
-                  const duplicate =
-                    r.duplicate ||
-                    w.entries.some(
-                      (e) =>
-                        e.account_id === account &&
-                        e.occurred_on === r.date &&
-                        e.merchant.trim().toLowerCase() ===
-                          r.description.trim().toLowerCase() &&
-                        (() => {
-                          try {
-                            return d(e.amount).eq(r.amount);
-                          } catch {
-                            return false;
-                          }
-                        })(),
-                    );
-                  return (
-                    <tr key={r.line}>
-                      <td>
-                        <input
-                          aria-label={"Select row " + r.line}
-                          type="checkbox"
-                          checked={r.selected}
-                          onChange={(e) =>
-                            update(i, "selected", e.target.checked)
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          aria-label={"Date row " + r.line}
-                          type="date"
-                          value={r.date}
-                          onChange={(e) => update(i, "date", e.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <input
-                          aria-label={"Description row " + r.line}
-                          value={r.description}
-                          onChange={(e) =>
-                            update(i, "description", e.target.value)
-                          }
-                        />
-                      </td>
-                      <td>
-                        <input
-                          aria-label={"Amount row " + r.line}
-                          value={r.amount}
-                          onChange={(e) => update(i, "amount", e.target.value)}
-                        />
-                      </td>
-                      <td>
-                        <select
-                          aria-label={"Type row " + r.line}
-                          value={
-                            r.kind ??
-                            (Number(r.amount) < 0 ? "expense" : "income")
-                          }
-                          onChange={(e) => update(i, "kind", e.target.value)}
-                        >
-                          {[
-                            "expense",
-                            "income",
-                            "refund",
-                            "transfer",
-                            "investment",
-                            "adjustment",
-                          ].map((k) => (
-                            <option key={k}>{k}</option>
-                          ))}
-                        </select>
-                        {r.kind === "transfer" && (
-                          <select
-                            aria-label={"Other account row " + r.line}
-                            value={r.target_account_id ?? ""}
+                {rows
+                  .slice(reviewPage * 50, (reviewPage + 1) * 50)
+                  .map((r, offset) => {
+                    const i = reviewPage * 50 + offset;
+                    const duplicate =
+                      r.duplicate ||
+                      w.entries.some(
+                        (e) =>
+                          e.account_id === account &&
+                          e.occurred_on === r.date &&
+                          e.merchant.trim().toLowerCase() ===
+                            r.description.trim().toLowerCase() &&
+                          (() => {
+                            try {
+                              return d(e.amount).eq(r.amount);
+                            } catch {
+                              return false;
+                            }
+                          })(),
+                      );
+                    return (
+                      <tr key={r.line}>
+                        <td>
+                          <input
+                            aria-label={"Select row " + r.line}
+                            type="checkbox"
+                            checked={r.selected}
                             onChange={(e) =>
-                              update(i, "target_account_id", e.target.value)
+                              update(i, "selected", e.target.checked)
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            aria-label={"Date row " + r.line}
+                            type="date"
+                            value={r.date}
+                            onChange={(e) => update(i, "date", e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            aria-label={"Description row " + r.line}
+                            value={r.description}
+                            onChange={(e) =>
+                              update(i, "description", e.target.value)
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            aria-label={"Amount row " + r.line}
+                            value={r.amount}
+                            onChange={(e) =>
+                              update(i, "amount", e.target.value)
+                            }
+                          />
+                        </td>
+                        <td>
+                          <select
+                            aria-label={"Type row " + r.line}
+                            value={
+                              r.kind ??
+                              (Number(r.amount) < 0 ? "expense" : "income")
+                            }
+                            onChange={(e) => update(i, "kind", e.target.value)}
+                          >
+                            {[
+                              "expense",
+                              "income",
+                              "refund",
+                              "transfer",
+                              "investment",
+                              "adjustment",
+                            ].map((k) => (
+                              <option key={k}>{k}</option>
+                            ))}
+                          </select>
+                          {r.kind === "transfer" && (
+                            <select
+                              aria-label={"Other account row " + r.line}
+                              value={r.target_account_id ?? ""}
+                              onChange={(e) =>
+                                update(i, "target_account_id", e.target.value)
+                              }
+                            >
+                              <option value="">Choose other account</option>
+                              {w.accounts
+                                .filter(
+                                  (a) =>
+                                    !a.archived &&
+                                    a.id !== account &&
+                                    a.currency ===
+                                      w.accounts.find((a) => a.id === account)
+                                        ?.currency,
+                                )
+                                .map((a) => (
+                                  <option key={a.id} value={a.id}>
+                                    {a.name}
+                                  </option>
+                                ))}
+                            </select>
+                          )}
+                        </td>
+                        <td>
+                          <select
+                            aria-label={"Category row " + r.line}
+                            value={r.category}
+                            onChange={(e) =>
+                              update(i, "category", e.target.value)
                             }
                           >
-                            <option value="">Choose other account</option>
-                            {w.accounts
-                              .filter(
-                                (a) =>
-                                  !a.archived &&
-                                  a.id !== account &&
-                                  a.currency ===
-                                    w.accounts.find((a) => a.id === account)
-                                      ?.currency,
-                              )
-                              .map((a) => (
-                                <option key={a.id} value={a.id}>
-                                  {a.name}
-                                </option>
-                              ))}
+                            {CATEGORIES.map((c) => (
+                              <option key={c}>{c}</option>
+                            ))}
                           </select>
-                        )}
-                      </td>
-                      <td>
-                        <select
-                          aria-label={"Category row " + r.line}
-                          value={r.category}
-                          onChange={(e) =>
-                            update(i, "category", e.target.value)
-                          }
-                        >
-                          {CATEGORIES.map((c) => (
-                            <option key={c}>{c}</option>
-                          ))}
-                        </select>
-                      </td>
-                      <td>
-                        <span className="tag">
-                          {duplicate
-                            ? "Possible duplicate"
-                            : r.confidence === "high"
-                              ? "Check source"
-                              : "Needs review"}
-                        </span>
-                        {r.ai_score !== undefined && (
-                          <small>
-                            AI suggestion · {Math.round(r.ai_score * 100)}%
-                            model score · verify before saving
-                          </small>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </td>
+                        <td>
+                          <span className="tag">
+                            {duplicate
+                              ? "Possible duplicate"
+                              : r.confidence === "high"
+                                ? "Check source"
+                                : "Needs review"}
+                          </span>
+                          {r.error && <small>{r.error}</small>}
+                          {r.ai_score !== undefined && (
+                            <small>
+                              AI suggestion · {Math.round(r.ai_score * 100)}%
+                              model score · verify before saving
+                            </small>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
               </tbody>
             </table>
           </div>
+          {rows.length > 50 && (
+            <div className="heading-actions">
+              <button
+                className="secondary"
+                disabled={!reviewPage}
+                onClick={() => setReviewPage((p) => p - 1)}
+              >
+                Previous rows
+              </button>
+              <span>
+                Rows {reviewPage * 50 + 1}–
+                {Math.min((reviewPage + 1) * 50, rows.length)} of {rows.length}
+              </span>
+              <button
+                className="secondary"
+                disabled={(reviewPage + 1) * 50 >= rows.length}
+                onClick={() => setReviewPage((p) => p + 1)}
+              >
+                Next rows
+              </button>
+            </div>
+          )}
           <label className="checkbox-label">
             <input
               type="checkbox"

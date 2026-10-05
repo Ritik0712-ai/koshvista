@@ -79,3 +79,7 @@ Select up to **six PNG/JPEG screenshots** of the same statement, portfolio or ho
 ### Saved documents awaiting import
 
 Saving a document stores its evidence only. The library labels unprocessed sources **Saved only · review needed** and offers **Review and import records**. Reopen a saved source as investments, bank activity or an FD/bond without uploading it again; retain its original hash and private file. **Read saved original again** retries local extraction. Portfolio filenames/headers are detected, multiline share layouts produce editable candidates, missing prices remain blank and incomplete holdings cannot be posted. Dark screenshots receive a second contrast pass, but OCR values still require checking against the original. Confirmed holdings update investments and net worth; they do not create bank income or spending.
+
+### Axis statement reconciliation
+
+Axis text PDFs are read by page coordinates, preserving wrapped narration and transaction lines. The review derives debit/credit signs from successive running balances and checks each amount, both printed totals and the closing balance. Missing or contradictory rows block posting. A statement-based account helper uses its documented opening date and balance; a 50-row review pager supports long statements. Possible own-account movements require classification, investment movements stay outside income/spending, and matching same-day UPI reversals are suggested as refunds. Other bank layouts still require individual verification.

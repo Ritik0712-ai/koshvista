@@ -41,3 +41,7 @@ Up to six PNG/JPEG images can be imported together within the 20 MB source limit
 ## Saved portfolio recovery update
 
 Added saved-document review/resume, purpose correction, original re-reading, portfolio detection, multiline shares extraction, high-contrast OCR for dark screens, missing-value gates and review totals. Document storage is explicitly distinct from importing financial records. A focused live-database test verifies a previously saved statement can be imported as a portfolio exactly once while keeping its source identity. Personal source files and verification data stay in ignored artifacts and are never committed.
+
+### Axis statement reconciliation
+
+Axis text PDFs are read by page coordinates, preserving wrapped narration and transaction lines. The review derives debit/credit signs from successive running balances and checks each amount, both printed totals and the closing balance. Missing or contradictory rows block posting. A statement-based account helper uses its documented opening date and balance; a 50-row review pager supports long statements. Possible own-account movements require classification, investment movements stay outside income/spending, and matching same-day UPI reversals are suggested as refunds. Other bank layouts still require individual verification.
