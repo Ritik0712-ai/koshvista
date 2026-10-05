@@ -1,6 +1,6 @@
 # KoshVista — Website Implementation Plan
 
-**Status:** Delivery plan, revised 2026-10-04 for Neon. This correction does not authorise application implementation.
+**Status:** Website specification. Implementation was subsequently authorised by the user. Vercel is now the active host; Neon remains the sole application backend. See BUILD_STATUS.md for implemented and verified delivery status.
 
 The release target is the complete finance website defined in [the PRD](01-product-requirements.md). Phases are an engineering order with reviewable deliverables, not a beginner edition or permission to ship a partial app. All generated project artefacts remain inside `/Volumes/RitikSSD/Projects/Ultimate Expense Tracker/`. The new public website repository is separate from `koshvista-android`; preserve the existing Android checkout and uncommitted work.
 
@@ -12,7 +12,7 @@ The release target is the complete finance website defined in [the PRD](01-produ
 
 ## Phase 1 — Setup and delivery foundation
 
-**Work:** Create React/TypeScript/Vite project in a clean new-repo checkout; add Tailwind tokens, lint/format/typecheck, Vitest, Playwright, accessibility checks, synthetic fixture generator and CI. Configure Cloudflare Pages preview/production deployment and environment variable names without committing secrets. Add licence and Node/Vite ignore rules if GitHub did not create them.
+**Work:** Create React/TypeScript/Vite project in a clean new-repo checkout; add Tailwind tokens, lint/format/typecheck, Vitest, Playwright, accessibility checks, synthetic fixture generator and CI. Configure Vercel preview/production deployment and environment variable names without committing secrets. Add licence and Node/Vite ignore rules if GitHub did not create them.
 
 **Deliverables:** Deployed placeholder shell, reproducible local build, green CI, light/dark responsive foundation. **Gate:** 360 px and desktop smoke tests, zero paid services.
 

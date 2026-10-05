@@ -1,10 +1,10 @@
 # KoshVista — Technical Requirements Document (Website)
 
-**Status:** Website architecture, revised 2026-10-04. Neon provides all application backend capabilities. No implementation or cloud resource creation is authorised by this document.
+**Status:** Website specification. Implementation was subsequently authorised by the user. Vercel is now the active host; Neon remains the sole application backend. See BUILD_STATUS.md for implemented and verified delivery status.
 
 ## 1. Architecture and deployment target
 
-KoshVista is a responsive React/TypeScript website with optional PWA installability. A static frontend deploys on **Cloudflare Pages Free** from the new public GitHub repository. **Neon Free** is the complete application backend: Lakebase Postgres for financial records, Managed Better Auth for login, Neon Functions for the authenticated API, and private Neon Object Storage for retained documents. Use an AWS Neon region where all three backend services are available; `aws-ap-southeast-1` is the preferred India-adjacent candidate after checking availability. No database credential or storage key reaches the browser.
+KoshVista is a responsive React/TypeScript website with optional PWA installability. A static frontend deploys on **Vercel Hobby** from the new public GitHub repository. **Neon Free** is the complete application backend: Lakebase Postgres for financial records, Managed Better Auth for login, Neon Functions for the authenticated API, and private Neon Object Storage for retained documents. Use an AWS Neon region where all three backend services are available; `aws-ap-southeast-1` is the preferred India-adjacent candidate after checking availability. No database credential or storage key reaches the browser.
 
 ```text
 Browser/PWA: React UI, charts, import workers, short-lived local drafts
@@ -12,7 +12,7 @@ Browser/PWA: React UI, charts, import workers, short-lived local drafts
     ├─ authenticated HTTPS → Neon Function API → Lakebase Postgres
     ├─ authorised short-lived upload URL → private Neon Object Storage
     └─ separate Google Drive OAuth → encrypted backup in user's appDataFolder
-Cloudflare Pages → static website
+Vercel → static website
 GitHub → public source, CI and synthetic fixtures only
 ```
 

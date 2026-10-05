@@ -1,6 +1,6 @@
 # KoshVista — Website Backend and PostgreSQL Schema
 
-**Status:** Logical schema for Neon Lakebase Postgres, revised 2026-10-04. All names/types are migration targets; no database has been created by this document.
+**Status:** Website specification. Implementation was subsequently authorised by the user. Vercel is now the active host; Neon remains the sole application backend. See BUILD_STATUS.md for implemented and verified delivery status.
 
 ## 1. Conventions
 

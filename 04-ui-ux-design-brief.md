@@ -1,6 +1,6 @@
 # KoshVista — Website UI/UX Design Brief
 
-**Status:** Design specification, 2026-10-02. Applies to responsive desktop and mobile web; optional PWA uses the same interface.
+**Status:** Website specification. Implementation was subsequently authorised by the user. Vercel is now the active host; Neon remains the sole application backend. See BUILD_STATUS.md for implemented and verified delivery status.
 
 ## 1. Design intent
 

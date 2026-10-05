@@ -1,6 +1,6 @@
 # KoshVista — Complete Website Flow
 
-**Status:** Website interaction contract, revised 2026-10-04 for Neon Auth. Route names are implementation targets, not an existing deployed site.
+**Status:** Website specification. Implementation was subsequently authorised by the user. Vercel is now the active host; Neon remains the sole application backend. See BUILD_STATUS.md for implemented and verified delivery status.
 
 ## 1. Navigation and global behaviour
 

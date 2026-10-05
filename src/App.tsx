@@ -631,7 +631,10 @@ export function App() {
             className="icon-button"
             aria-label="Sign out"
             onClick={async () => {
-              if (!demo) await auth?.signOut();
+              if (!demo) {
+                (await import("./lib/drive")).driveDisconnect();
+                await auth?.signOut();
+              }
               qc.clear();
               window.location.assign("/");
             }}
@@ -992,7 +995,9 @@ export function App() {
                     <>
                       <p>
                         {source.name} · saved{" "}
-                        {source.created_at ? new Date(source.created_at).toLocaleString() : "date unavailable"}
+                        {source.created_at
+                          ? new Date(source.created_at).toLocaleString()
+                          : "date unavailable"}
                       </p>
                       {source.extracted_text && (
                         <details>
