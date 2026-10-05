@@ -8,6 +8,7 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/latin-700.css";
 import "./styles.css";
 import { App, Login } from "./App";
+import { Privacy } from "./Privacy";
 const client = new QueryClient({
   defaultOptions: { queries: { staleTime: 30000, retry: 1 } },
 });
@@ -38,6 +39,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Login />} />
+            <Route path="/privacy" element={<Privacy />} />
             <Route path="/app/*" element={<App />} />
             <Route path="/demo/*" element={<App />} />
             <Route path="*" element={<Navigate to="/" />} />
@@ -47,3 +49,11 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </Boundary>
   </React.StrictMode>,
 );
+if ("serviceWorker" in navigator && import.meta.env.PROD)
+  void navigator.serviceWorker
+    .register("/sw.js")
+    .catch(() =>
+      console.warn(
+        "Offline shell is unavailable in this browser. Cloud saving is unaffected.",
+      ),
+    );

@@ -63,3 +63,11 @@ The `koshvista` project is linked to `Ritik0712-ai/koshvista` on the Vercel Hobb
 ## Cloudflare deployment (retained)
 
 The existing `koshvista` Worker is connected to this repository. Its deploy command is `npx wrangler deploy`; `wrangler.jsonc` runs `npm run build` and uploads only `dist`, with SPA navigation fallback. Leave the separate dashboard build command empty to avoid building twice. `.env.production` contains only public browser endpoints; override those for your own deployment. Keep all credentials in ignored `.env.local` or server-side secret storage. The Hono API is deployed separately to Neon Functions.
+
+## Import and save workflow
+
+Choose bank statement, portfolio or FD/bond, upload a CSV/PDF/image, and review the extracted text. **Save document** persists the source independently of financial rows. Keeping the original stores it privately in Neon. Review and save transactions/holdings/deposits separately; repeated imports are detected. Saved sources appear in the document library, and ledger descriptions open transaction details with source evidence.
+
+**Suggest categories** runs an optional local classifier. Progress and errors are visible; suggested rows remain unchecked until reviewed. OCR and AI can make mistakes. Password-protected PDFs accept an in-memory password that is never saved.
+
+Production Google/Drive setup is documented in [GOOGLE_SETUP.md](GOOGLE_SETUP.md).

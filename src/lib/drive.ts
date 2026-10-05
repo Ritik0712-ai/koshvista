@@ -24,6 +24,10 @@ let sessionToken = "",
 export async function driveConnect() {
   await token(true);
 }
+export function driveDisconnect() {
+  sessionToken = "";
+  expiresAt = 0;
+}
 async function token(interactive = true) {
   if (sessionToken && Date.now() < expiresAt) return sessionToken;
   if (!interactive)

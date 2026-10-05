@@ -73,11 +73,24 @@ export async function extract(
   file: File,
   onProgress: (s: string) => void,
   signal?: AbortSignal,
+  password?: string,
 ) {
   if (file.size > 20000000)
     throw new Error("Choose a file smaller than 20 MB.");
-  if (file.name.toLowerCase().endsWith(".csv"))
-    return { text: await file.text(), rows: parseCSV(await file.text()) };
+  if (file.name.toLowerCase().endsWith(".csv")) {
+    const text = await file.text();
+    try {
+      return { text, rows: parseCSV(text) };
+    } catch (e) {
+      return {
+        text,
+        rows: [],
+        warning:
+          (e as Error).message +
+          ". Edit the source headers below and parse again.",
+      };
+    }
+  }
   let text = "";
   const check = () => {
     if (signal?.aborted)
@@ -113,7 +126,10 @@ export async function extract(
         "pdfjs-dist/build/pdf.worker.min.mjs",
         import.meta.url,
       ).href;
-      const task = pdf.getDocument({ data: await file.arrayBuffer() });
+      const task = pdf.getDocument({
+        data: await file.arrayBuffer(),
+        password,
+      });
       const doc = await task.promise;
       if (doc.numPages > 100)
         throw new Error("Split this PDF into files of up to 100 pages.");

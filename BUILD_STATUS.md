@@ -1,46 +1,35 @@
-# Build checkpoint — 4 October 2026
+# Build checkpoint — 5 October 2026
 
-## Workspace boundary
+## Live application
 
-Website checkout: `/Volumes/RitikSSD/Projects/Ultimate Expense Tracker/koshvista`.
-Remote: `https://github.com/Ritik0712-ai/koshvista`.
-The parent checkout is the historical Android repository. It has been preserved; do not commit website files into that repository.
-
-## Provisioned
-
-- Neon project `soft-tree-07106322`, branch `br-frosty-meadow-b33rc0ok`, Singapore region.
-- Managed Neon Auth with the shared Google development provider; localhost enabled.
-- Private `source-documents` bucket.
-- Function `api`: `https://br-frosty-meadow-b33rc0ok-api.compute.c-4.ap-southeast-1.aws.neon.tech`.
-- Three database migrations applied: core schema/RLS, additional integrity constraints/funding references, event retry keys.
-- Credentials are only in Git-ignored `.env.local`. `.env.example` contains placeholders.
+- Website: https://koshvista.vercel.app (Vercel, Git-linked main).
+- Repository: https://github.com/Ritik0712-ai/koshvista.
+- Neon project `soft-tree-07106322`, main branch `br-frosty-meadow-b33rc0ok`, Singapore.
+- Neon manages PostgreSQL, authentication, the API function and private source-document storage. Supabase is not used as a service.
+- Nine database migrations applied, including source extraction metadata, splits/tags, calendar reminders, documented coupon frequency and edit history.
+- Credentials remain in ignored `.env.local`; browser endpoints are public configuration.
 
 ## Implemented
 
-Responsive dashboard, cash/account ledger, transactions and transfers, budgets, investment trades and dated valuations, FD/bond records and settlement, liability details, recurring reminders, charts, CSV imports, PDF text and image OCR extraction, review-before-posting, duplicate protection, optional browser AI categorisation, encrypted export/restore, Drive integration, audit history and private original-document routes.
+Responsive dashboard; bank, cash and investment accounts; transaction ledger and paired transfers; category splits and tags; monthly budgets; investment trades, reversal and dated valuations; funded FDs, actual maturity payments and periodic interest; liabilities; recurring payments with calendar reminders; chart filters, data tables and exports; saved bank/portfolio/FD source documents, private originals, extracted text, import receipts and duplicate protection; transaction source evidence and edit history; encrypted archive export/restore; session management and account deletion; privacy page and installable public app shell.
 
-## Verified so far
+Document reading and optional AI classification run in the browser. Local AI suggests categories, with scores and review required. It does not invent balances, guarantee correct OCR, execute financial trades or provide live market prices. Save document works independently of posting reviewed financial records.
 
-- Production frontend compilation and TypeScript.
-- Decimal precision, transfer exclusion, snapshot unknown-cost handling, FD projections, formula-safe CSV exports, CSV parsing, conservative PDF-text candidates, encrypted archive round-trip and wrong-passphrase failure.
-- Live PostgreSQL RLS read/write isolation with rollback.
-- API + real database integration under synthetic JWT identities: account isolation, transfer pairing/retry protection, duplicate statement imports, rollback, invalid resources, full ledger/receipt archive restoration.
-- Browser inspection at desktop and 360px widths; fixed mobile horizontal overflow; verified sample cash expense updates dashboard and cash balance.
-- Deployed API health returns 200 and unauthenticated state access returns 401.
+## Verified
 
-## External setup in progress
+- Real Google login and authenticated workspace loading on the public site.
+- Public screenshot OCR and portfolio review; public local-model inference returns editable suggestions.
+- Private original upload/download and storage CORS against synthetic test identities.
+- Unit coverage for decimal arithmetic, cash/transfer accounting, dated portfolio values, category splits, calendar reminders, coupon estimates, CSV safety and encrypted archives.
+- Live PostgreSQL/API integration coverage for ownership isolation, transfers, import retries, source persistence, portfolio imports, funded maturity payouts, oversell/reversal protection, split validation, recurring payments and archive restoration. Test authentication is synthetic; real OAuth is separately verified in the browser.
+- Production TypeScript/build and GitHub frontend verification pipeline.
 
-The user created the `koshvista` Cloudflare Worker and connected GitHub. Its initial deploy failed because Wrangler incorrectly auto-detected Hono and had no explicit configuration. On 5 October, added a pinned-lockfile Wrangler dependency, explicit static asset build/routing configuration, and public production API/Auth endpoints. Production build and Wrangler dry run passed. Cloudflare build `104be1c2-20bc-4d95-bfab-7cc861e77a8d` compiled successfully and uploaded all 20 assets. Publishing failed because the account has no workers.dev subdomain. An authenticated registration attempt returned HTTP 403 / code 10039: “You cannot register a workers.dev subdomain. Please contact abusereply@cloudflare.com for assistance.” The website is not publicly live. Support must resolve the account restriction before public URL, origin configuration and live authentication verification can proceed. No further name retries or alternative hosts were used. Eleven unit tests passed; eight database integration tests were skipped in this run because test credentials were not loaded.
+## Remaining external configuration and acceptance work
 
-## Required before calling this production complete
+- The current Google login uses Neon's shared development provider. Supply an own production Google OAuth client as described in [GOOGLE_SETUP.md](GOOGLE_SETUP.md).
+- Google Drive integration is implemented but its own client configuration and real consent/upload/download/restore verification remain pending. Encrypted downloads and normal Neon saves work independently. Automatic Drive backup requires the website to stay open, an in-memory passphrase, network and valid Google authorisation.
+- Representative redacted bank/broker statements are needed to certify specific institution layouts. Generic text/OCR extraction requires review and can miss fields.
+- Cloudflare account publishing remains blocked; Vercel is the active host.
+- Backend function deployment is currently a separate controlled CLI step; frontend main pushes automatically deploy through Vercel.
 
-- Real Google OAuth browser verification and own production Google OAuth client configuration (shared Neon provider is for development).
-- Google Drive client configuration, real upload/download verification, and restore in a clean authenticated session.
-- Live private-object upload/download/CORS verification.
-- Exercise optional local AI and OCR workers in the production browser/CSP, including device failures. Category suggestions are not guaranteed classifications.
-- Representative, redacted bank/broker documents to validate institution-specific layouts. Generic extraction currently requires review; portfolio/FD OCR text supports verified entry rather than an unverified automatic posting promise.
-- Add more event tests for funded FD settlement and trade reversal; verify same-day ordering and correction semantics.
-- Complete session-management/account-identity deletion UX and any additional acceptance requirements in the six specifications.
-- Configure and verify CI/deployment automation, security/dependency review, and final accessibility checks.
-
-This is an implementation checkpoint, not a claim of a fully verified final release.
+This checkpoint distinguishes implemented functionality from unverified external integrations; it is not a claim that every production acceptance criterion is complete.

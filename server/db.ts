@@ -57,10 +57,21 @@ export async function audit(
   action: string,
   entity: string,
   id: string | null,
+  change?: {
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+  },
 ) {
   await db.query(
-    "INSERT INTO app.audit(owner_id,action,entity_type,entity_id) VALUES($1,$2,$3,$4)",
-    [owner, action, entity, id],
+    "INSERT INTO app.audit(owner_id,action,entity_type,entity_id,before_data,after_data) VALUES($1,$2,$3,$4,$5,$6)",
+    [
+      owner,
+      action,
+      entity,
+      id,
+      change?.before ? JSON.stringify(change.before) : null,
+      change?.after ? JSON.stringify(change.after) : null,
+    ],
   );
 }
 export async function insert(
@@ -71,7 +82,9 @@ export async function insert(
 ) {
   if (!tables.includes(table as (typeof tables)[number]))
     throw new Error("Invalid resource");
-  const values = { ...data, owner_id: owner };
+  const values: Record<string, unknown> = { ...data, owner_id: owner };
+  if (Array.isArray(values.splits))
+    values.splits = JSON.stringify(values.splits);
   const keys = Object.keys(values);
   if (keys.some((k) => !/^[a-z_][a-z0-9_]*$/.test(k)))
     throw new Error("Invalid field");

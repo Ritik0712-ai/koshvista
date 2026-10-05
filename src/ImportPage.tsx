@@ -32,13 +32,20 @@ export function ImportPage({
   const [file, setFile] = useState<File | null>(null),
     [text, setText] = useState(""),
     [rows, setRows] = useState<Candidate[]>([]),
-    [account, setAccount] = useState(w.accounts[0]?.id ?? ""),
+    [account, setAccount] = useState(
+      w.accounts.find((a) => !a.archived)?.id ?? "",
+    ),
     [busy, setBusy] = useState(false),
     [status, setStatus] = useState(""),
     [retain, setRetain] = useState(true),
     [saved, setSaved] = useState(false),
+    [pdfPassword, setPdfPassword] = useState(""),
     [type, setType] = useState("statement");
-  async function read(f: File) {
+  useEffect(() => {
+    if (!w.accounts.some((a) => a.id === account && !a.archived))
+      setAccount(w.accounts.find((a) => !a.archived)?.id ?? "");
+  }, [w.accounts, account]);
+  async function read(f: File, password = pdfPassword) {
     setFile(f);
     setSaved(false);
     setRows([]);
@@ -47,7 +54,12 @@ export function ImportPage({
     setStatus("Reading file…");
     readCancel.current = new AbortController();
     try {
-      const result = await extract(f, setStatus, readCancel.current.signal);
+      const result = await extract(
+        f,
+        setStatus,
+        readCancel.current.signal,
+        password,
+      );
       setText(result.text);
       setRows(
         result.rows.map((r) => {
@@ -62,9 +74,11 @@ export function ImportPage({
         }),
       );
       setStatus(
-        result.rows.length
-          ? "Review all extracted rows before posting."
-          : "Text extracted. Review it below and create verified records; nothing has been posted.",
+        "warning" in result && result.warning
+          ? result.warning
+          : result.rows.length
+            ? "Review all extracted rows before posting."
+            : "Text extracted. Review it below and create verified records; nothing has been posted.",
       );
     } catch (e) {
       setStatus((e as Error).message);
@@ -184,6 +198,8 @@ export function ImportPage({
           description: r.description,
           amount: r.amount,
           category: r.category,
+          kind: r.kind ?? (d(r.amount).lt(0) ? "expense" : "income"),
+          target_account_id: r.target_account_id || null,
         }));
       const result = await request<{
         posted: number;
@@ -246,13 +262,36 @@ export function ImportPage({
               type="file"
               accept=".csv,.pdf,image/png,image/jpeg"
               disabled={busy}
-              onChange={(e) => e.target.files?.[0] && read(e.target.files[0])}
+              onChange={(e) => {
+                setPdfPassword("");
+                if (e.target.files?.[0]) void read(e.target.files[0], "");
+              }}
             />
           </label>
           {file && (
             <p>
               <FileText size={15} /> {file.name}
             </p>
+          )}
+          {file?.type === "application/pdf" && (
+            <>
+              <label>
+                PDF password (used only on this device)
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={pdfPassword}
+                  onChange={(e) => setPdfPassword(e.target.value)}
+                />
+              </label>
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() => read(file)}
+              >
+                Read PDF with this password
+              </button>
+            </>
           )}
           <p role="status" className="notice">
             {status ||
@@ -481,13 +520,21 @@ export function ImportPage({
             Optional model download from Hugging Face; transaction descriptions
             stay on this device. Up to 50 uncategorised rows per run.
           </p>
+          {!rows.some((r) => r.category === "Other") && (
+            <p className="muted small">
+              Every row already has a category. You can edit categories
+              directly; AI runs on rows marked Other.
+            </p>
+          )}
           <p role="status" className="notice">
             {status ||
               "Choose Suggest to classify uncategorised descriptions. The first run downloads a model and can take several minutes."}
           </p>
           <p className="muted">
-            Negative values decrease the account. Review transfers separately to
-            avoid treating your own money as income or spending.
+            Negative values decrease the account. Choose Transfer and the other
+            account for your own money movements, including ATM withdrawals.
+            Choose Investment for deposits or brokerage funding that should not
+            count as spending.
           </p>
           <div className="table-wrap">
             <table className="import-table">
@@ -497,6 +544,7 @@ export function ImportPage({
                   <th>Date</th>
                   <th>Description</th>
                   <th>Signed amount</th>
+                  <th>Type / other account</th>
                   <th>Category</th>
                   <th>Review</th>
                 </tr>
@@ -552,6 +600,52 @@ export function ImportPage({
                           value={r.amount}
                           onChange={(e) => update(i, "amount", e.target.value)}
                         />
+                      </td>
+                      <td>
+                        <select
+                          aria-label={"Type row " + r.line}
+                          value={
+                            r.kind ??
+                            (Number(r.amount) < 0 ? "expense" : "income")
+                          }
+                          onChange={(e) => update(i, "kind", e.target.value)}
+                        >
+                          {[
+                            "expense",
+                            "income",
+                            "refund",
+                            "transfer",
+                            "investment",
+                            "adjustment",
+                          ].map((k) => (
+                            <option key={k}>{k}</option>
+                          ))}
+                        </select>
+                        {r.kind === "transfer" && (
+                          <select
+                            aria-label={"Other account row " + r.line}
+                            value={r.target_account_id ?? ""}
+                            onChange={(e) =>
+                              update(i, "target_account_id", e.target.value)
+                            }
+                          >
+                            <option value="">Choose other account</option>
+                            {w.accounts
+                              .filter(
+                                (a) =>
+                                  !a.archived &&
+                                  a.id !== account &&
+                                  a.currency ===
+                                    w.accounts.find((a) => a.id === account)
+                                      ?.currency,
+                              )
+                              .map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name}
+                                </option>
+                              ))}
+                          </select>
+                        )}
                       </td>
                       <td>
                         <select

@@ -64,6 +64,17 @@ export const schemas = {
     merchant: text.min(1),
     note: z.string().max(2000).default(""),
     idempotency_key: z.string().min(1).max(300),
+    tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+    splits: z
+      .array(
+        z.object({
+          category: text.min(1),
+          amount: positive,
+          note: z.string().max(500).default(""),
+        }),
+      )
+      .max(50)
+      .default([]),
   }),
   budgets: z.object({
     category: text.min(1),
@@ -113,6 +124,10 @@ export const schemas = {
         z.literal(12),
       ]),
       payout: z.enum(["cumulative", "periodic"]),
+      coupon_frequency: z
+        .enum(["monthly", "quarterly", "half_yearly", "yearly"])
+        .nullable()
+        .default(null),
       status: z.enum(["active", "matured", "closed"]),
       note: z.string().max(2000).default(""),
     })
@@ -128,6 +143,7 @@ export const schemas = {
     note: z.string().max(2000).default(""),
   }),
   recurring: z.object({
+    anchor_day: z.number().int().min(1).max(31).nullable().optional(),
     merchant: text.min(1),
     category: text.min(1),
     amount: positive,
@@ -166,6 +182,17 @@ export const importSchema = z.object({
         description: text.min(1),
         amount: amount.refine((s) => !new Decimal(s).isZero()),
         category: text.min(1),
+        kind: z
+          .enum([
+            "income",
+            "expense",
+            "refund",
+            "investment",
+            "adjustment",
+            "transfer",
+          ])
+          .optional(),
+        target_account_id: uuid.nullable().optional(),
       }),
     )
     .min(1)
@@ -194,21 +221,36 @@ export const wealthImportSchema = z
     "Review at least one record before saving",
   );
 export function validatedEntry(v: z.infer<typeof schemas.entries>) {
-  if (v.kind === "expense" && new Decimal(v.amount).gte(0))
-    throw new z.ZodError([
-      {
-        code: "custom",
-        path: ["amount"],
-        message: "Expenses must decrease the account balance",
-      },
-    ]);
-  if (["income", "refund"].includes(v.kind) && new Decimal(v.amount).lte(0))
-    throw new z.ZodError([
-      {
-        code: "custom",
-        path: ["amount"],
-        message: "Income and refunds must increase the account balance",
-      },
-    ]);
-  return v;
+  return schemas.entries
+    .superRefine((entry, ctx) => {
+      if (
+        entry.splits.length &&
+        (!["expense", "refund"].includes(entry.kind) ||
+          !entry.splits
+            .reduce((s, r) => s.plus(r.amount), new Decimal(0))
+            .eq(new Decimal(entry.amount).abs()))
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["splits"],
+          message:
+            "Split amounts must equal the full expense or refund amount.",
+        });
+      if (entry.kind === "expense" && new Decimal(entry.amount).gte(0))
+        ctx.addIssue({
+          code: "custom",
+          path: ["amount"],
+          message: "Expenses must decrease the account balance",
+        });
+      if (
+        ["income", "refund"].includes(entry.kind) &&
+        new Decimal(entry.amount).lte(0)
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["amount"],
+          message: "Income and refunds must increase the account balance",
+        });
+    })
+    .parse(v);
 }

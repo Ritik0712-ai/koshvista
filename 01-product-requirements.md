@@ -1,6 +1,6 @@
 # KoshVista — Product Requirements Document (Website)
 
-**Status:** Website specification, revised 2026-10-04. Neon is the sole application backend provider; this request does not authorise app implementation.
+**Status:** Website specification, revised 2026-10-04. Neon is the sole application backend provider; implementation is now authorised by the user. See BUILD_STATUS.md for verified delivery status.
 
 ## 1. Overview
 

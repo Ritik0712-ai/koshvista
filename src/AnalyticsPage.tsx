@@ -6,6 +6,8 @@ import {
   income,
   spending,
   categoryTotals,
+  expandEntries,
+  netWorth,
   formatMoney as fmt,
   holdings,
   today,
@@ -19,11 +21,12 @@ export function AnalyticsPage({ w }: { w: Workspace }) {
   const [to, setTo] = useState(today());
   const [account, setAccount] = useState("all");
   const [category, setCategory] = useState("all");
+  const [worthDate, setWorthDate] = useState<string | null>(null);
   const [drill, setDrill] = useState<{ title: string; rows: Entry[] } | null>(
     null,
   );
   const currency = w.profile.currency;
-  const es = w.entries.filter(
+  const es = expandEntries(w.entries).filter(
     (e) =>
       e.currency === currency &&
       e.occurred_on >= from &&
@@ -50,6 +53,11 @@ export function AnalyticsPage({ w }: { w: Workspace }) {
     income: income(es.filter((e) => e.occurred_on === date)).toNumber(),
     spending: spending(es.filter((e) => e.occurred_on === date)).toNumber(),
     balance: accounts
+      .reduce((s, a) => s.plus(balance(a, w.entries, date)), d(0))
+      .toNumber(),
+    worth: netWorth(w, currency, date).toNumber(),
+    cash: w.accounts
+      .filter((a) => a.currency === currency && a.kind === "cash")
       .reduce((s, a) => s.plus(balance(a, w.entries, date)), d(0))
       .toNumber(),
   }));
@@ -225,7 +233,7 @@ export function AnalyticsPage({ w }: { w: Workspace }) {
           </p>
         </section>
         <section className="panel">
-          <h2>Expense sizes</h2>
+          <h2>Expense allocation sizes</h2>
           <Chart
             label="Expense size histogram"
             onSelect={(_, index) => inspect(labels[index], binRows[index])}
@@ -237,7 +245,7 @@ export function AnalyticsPage({ w }: { w: Workspace }) {
               yAxis: { type: "value", minInterval: 1 },
               series: [
                 {
-                  name: "Transactions",
+                  name: "Expense portions",
                   type: "bar",
                   data: binRows.map((r) => r.length),
                 },
@@ -350,6 +358,144 @@ export function AnalyticsPage({ w }: { w: Workspace }) {
           </p>
         </section>
       </div>
+      <div className="dashboard-grid spaced">
+        <section className="panel">
+          <h2>Recorded net worth over time</h2>
+          <Chart
+            label="Recorded net worth over time"
+            onSelect={(_, i) => setWorthDate(dates[i])}
+            option={{
+              color: ["#147e70"],
+              tooltip: { trigger: "axis" },
+              grid,
+              xAxis: { type: "category", data: dates },
+              yAxis: { type: "value" },
+              series: [
+                {
+                  name: currency,
+                  type: "line",
+                  showSymbol: false,
+                  data: daily.map((r) => r.worth),
+                },
+              ],
+            }}
+          />
+          <p className="muted small">
+            All {currency} accounts, documented investment valuations (or known
+            cost when no valuation exists), and FD/bond principal. No invented
+            daily market prices. Account/category filters do not apply. Holdings
+            with unknown value and cost contribute zero and need a valuation.
+          </p>
+        </section>
+        <section className="panel">
+          <h2>Cash wallet history</h2>
+          <Chart
+            label="Cash wallet balances over time"
+            onSelect={(_, i) =>
+              inspect(
+                "Cash movements on " + dates[i],
+                w.entries.filter(
+                  (e) =>
+                    e.occurred_on === dates[i] &&
+                    w.accounts.some(
+                      (a) =>
+                        a.id === e.account_id &&
+                        a.currency === currency &&
+                        a.kind === "cash",
+                    ),
+                ),
+              )
+            }
+            option={{
+              color: ["#147e70"],
+              tooltip: { trigger: "axis" },
+              grid,
+              xAxis: { type: "category", data: dates },
+              yAxis: { type: "value" },
+              series: [
+                {
+                  name: currency,
+                  type: "line",
+                  showSymbol: false,
+                  data: daily.map((r) => r.cash),
+                },
+              ],
+            }}
+          />
+          <p className="muted small">
+            All {currency} cash wallets, including ATM transfers and cash
+            expenses. Account/category filters do not apply.
+          </p>
+        </section>
+      </div>
+      {worthDate && (
+        <section className="panel spaced">
+          <div className="section-head">
+            <h2>Net worth evidence on {worthDate}</h2>
+            <button className="secondary" onClick={() => setWorthDate(null)}>
+              Close net worth details
+            </button>
+          </div>
+          <p>Total: {fmt(netWorth(w, currency, worthDate), currency)}</p>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Component</th>
+                  <th>Recorded amount</th>
+                  <th>Basis</th>
+                </tr>
+              </thead>
+              <tbody>
+                {w.accounts
+                  .filter((a) => a.currency === currency)
+                  .map((a) => (
+                    <tr key={a.id}>
+                      <td>{a.name}</td>
+                      <td>{fmt(balance(a, w.entries, worthDate), currency)}</td>
+                      <td>
+                        Opening balance on {a.opening_date} plus subsequent
+                        ledger movements
+                      </td>
+                    </tr>
+                  ))}
+                {holdings(w, worthDate)
+                  .filter((h) => h.instrument.currency === currency)
+                  .map((h) => (
+                    <tr key={h.instrument.id}>
+                      <td>{h.instrument.name}</td>
+                      <td>{fmt(h.value ?? h.cost ?? 0, currency)}</td>
+                      <td>
+                        {h.asOf ?? "No dated evidence"} ·{" "}
+                        {h.value !== null
+                          ? h.source
+                          : h.cost !== null
+                            ? "Documented cost; valuation needed"
+                            : "Value unknown; excluded"}
+                      </td>
+                    </tr>
+                  ))}
+                {w.fixed_income
+                  .filter(
+                    (f) =>
+                      f.currency === currency &&
+                      f.start_on <= worthDate &&
+                      (f.settled_on
+                        ? f.settled_on > worthDate
+                        : f.status !== "closed"),
+                  )
+                  .map((f) => (
+                    <tr key={f.id}>
+                      <td>{f.name}</td>
+                      <td>{fmt(f.principal, currency)}</td>
+                      <td>Recorded principal; projections excluded</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
       {drill && (
         <section className="panel spaced">
           <div className="section-head">

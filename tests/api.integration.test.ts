@@ -373,6 +373,173 @@ describe.runIf(enabled)(
       },
       30000,
     );
+    it("saves a validated split and rejects allocations that change its total", async () => {
+      const body = {
+        account_id: account,
+        occurred_on: "2026-02-07",
+        amount: "-100",
+        currency: "INR",
+        kind: "expense",
+        category: "Other",
+        merchant: "QA split",
+        note: "",
+        idempotency_key: randomUUID(),
+        tags: ["fixture"],
+        splits: [
+          { category: "Groceries", amount: "60", note: "" },
+          { category: "Shopping", amount: "40", note: "" },
+        ],
+      };
+      const saved = await call("/data/entries", "POST", body);
+      expect(saved.status).toBe(201);
+      expect(saved.data.splits).toHaveLength(2);
+      expect(saved.data.tags).toEqual(["fixture"]);
+      expect(
+        (
+          await call("/data/entries/" + saved.data.id, "PATCH", {
+            ...body,
+            splits: [{ category: "Groceries", amount: "1", note: "" }],
+          })
+        ).status,
+      ).toBe(422);
+    }, 30000);
+    it("imports ATM movements as paired transfers and refunds as refunds", async () => {
+      const body = {
+        account_id: account,
+        source: {
+          name: "QA-transfer.csv",
+          sha256: "d".repeat(64),
+          mime_type: "text/csv",
+          byte_size: 50,
+        },
+        rows: [
+          {
+            line: 1,
+            date: "2026-02-08",
+            description: "ATM withdrawal",
+            amount: "-100",
+            category: "Transfer",
+            kind: "transfer",
+            target_account_id: cash,
+          },
+          {
+            line: 2,
+            date: "2026-02-08",
+            description: "QA refund",
+            amount: "10",
+            category: "Shopping",
+            kind: "refund",
+          },
+        ],
+      };
+      expect((await call("/import", "POST", body)).data.posted).toBe(2);
+      expect((await call("/import", "POST", body)).data.posted).toBe(0);
+      const es = (await call("/state")).data.entries;
+      const legs = es.filter(
+        (e: any) =>
+          e.source_document_id &&
+          e.source_line_key?.startsWith("1") &&
+          e.merchant?.includes("ATM"),
+      );
+      expect(legs[0].kind).toBe("transfer");
+      expect(
+        es
+          .filter((e: any) => e.transfer_group_id === legs[0].transfer_group_id)
+          .reduce((sum: number, e: any) => sum + Number(e.amount), 0),
+      ).toBe(0);
+      expect(es.find((e: any) => e.merchant === "QA refund").kind).toBe(
+        "refund",
+      );
+    }, 30000);
+    it("posts a recurring payment once and advances its calendar reminder", async () => {
+      const r = await call("/data/recurring", "POST", {
+        merchant: "QA recurring",
+        category: "Housing",
+        amount: "100",
+        currency: "INR",
+        next_due_on: "2026-01-31",
+        frequency: "monthly",
+        active: true,
+      });
+      const b = {
+        account_id: account,
+        due_on: "2026-01-31",
+        occurred_on: "2026-01-31",
+      };
+      expect(
+        (await call("/recurring/" + r.data.id + "/payment", "POST", b)).data
+          .next_due_on,
+      ).toBe("2026-02-28");
+      expect(
+        (await call("/recurring/" + r.data.id + "/payment", "POST", b)).data
+          .duplicate,
+      ).toBe(true);
+      expect(
+        (
+          await call("/recurring/" + r.data.id + "/payment", "POST", {
+            ...b,
+            due_on: "2026-02-28",
+            occurred_on: "2026-02-28",
+          })
+        ).data.next_due_on,
+      ).toBe("2026-03-31");
+    }, 30000);
+    it("records actual coupon income once without changing the holding principal", async () => {
+      const created = await call("/data/fixed_income", "POST", {
+        name: "QA periodic bond",
+        kind: "bond",
+        issuer: "Fixture",
+        principal: "1000",
+        currency: "INR",
+        annual_rate: "8",
+        start_on: "2026-01-31",
+        maturity_on: "2027-01-31",
+        compounding: 1,
+        payout: "periodic",
+        coupon_frequency: "quarterly",
+        status: "active",
+        note: "",
+        funding_account_id: null,
+        idempotency_key: randomUUID(),
+      });
+      expect(created.status).toBe(201);
+      const body = {
+        account_id: account,
+        occurred_on: "2026-04-30",
+        amount: "19.75",
+        idempotency_key: randomUUID(),
+      };
+      const path = "/fixed-income/" + created.data.id + "/interest";
+      expect((await call(path, "POST", body)).data.duplicate).toBe(false);
+      expect((await call(path, "POST", body)).data.duplicate).toBe(true);
+      const state = (await call("/state")).data;
+      expect(
+        state.fixed_income.find((f: any) => f.id === created.data.id).principal,
+      ).toBe("1000.0000");
+      const entries = state.entries.filter(
+        (e: any) =>
+          e.idempotency_key ===
+          "coupon:" + created.data.id + ":" + body.idempotency_key,
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0].kind).toBe("income");
+      expect(Number(entries[0].amount)).toBe(19.75);
+    }, 30000);
+    it("retains the original and edited values in transaction history", async () => {
+      const entry = (await call("/state")).data.entries.find(
+        (e: any) => e.kind === "expense" && !e.transfer_group_id,
+      );
+      const result = await call("/data/entries/" + entry.id, "PATCH", {
+        ...entry,
+        note: "QA corrected note",
+      });
+      expect(result.status, JSON.stringify(result.data)).toBe(200);
+      const history = (await call("/state")).data.audit.find(
+        (a: any) => a.entity_id === entry.id && a.action === "update",
+      );
+      expect(history.before_data.note).toBe(entry.note);
+      expect(history.after_data.note).toBe("QA corrected note");
+    }, 30000);
     it("round trips imported entries, paired transfers, profiles and receipts", async () => {
       const original = (await call("/state")).data;
       await call("/workspace", "DELETE", { confirmation: "DELETE MY DATA" });

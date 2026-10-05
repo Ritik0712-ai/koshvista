@@ -46,16 +46,20 @@ import {
   netWorth,
   monthSeries,
   categoryTotals,
+  expandEntries,
+  advanceDue,
+  couponSchedule,
   holdings,
   fdValue,
   csv,
 } from "../shared/finance";
-import { schemas, transferSchema } from "../shared/validation";
+import { schemas, transferSchema, validatedEntry } from "../shared/validation";
 import { Editor, fields, type Field } from "./components/Editor";
 import { Chart } from "./components/Chart";
 import { ImportPage } from "./ImportPage";
 import { BackupPage } from "./BackupPage";
 import { AnalyticsPage } from "./AnalyticsPage";
+import { SecuritySettings } from "./SecuritySettings";
 import { useBackup } from "./lib/useBackup";
 const navigation = [
   ["", "Overview", LayoutDashboard],
@@ -169,6 +173,7 @@ export function Login() {
             Source code is open; your finances are not.
           </span>
         </div>
+        <Link to="/privacy">How your data is handled</Link>
       </div>
     </div>
   );
@@ -179,6 +184,20 @@ export function App() {
     base = demo ? "/demo" : "/app",
     page = location.pathname.slice(base.length).replace(/^\//, "");
   const qc = useQueryClient();
+  const [online, setOnline] = useState(navigator.onLine);
+  useEffect(() => {
+    const connect = () => {
+      setOnline(true);
+      void qc.invalidateQueries({ queryKey: ["workspace"] });
+    };
+    const disconnect = () => setOnline(false);
+    window.addEventListener("online", connect);
+    window.addEventListener("offline", disconnect);
+    return () => {
+      window.removeEventListener("online", connect);
+      window.removeEventListener("offline", disconnect);
+    };
+  }, [qc]);
   const [sampleState, setSample] = useState(sample),
     [mobile, setMobile] = useState(false),
     [notice, setNotice] = useState(""),
@@ -242,6 +261,27 @@ export function App() {
   ) => {
     const b: Record<string, unknown> = { ...values };
     if (resource === "entries") {
+      b.tags = [
+        ...new Set(
+          (values.tags_text ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+        ),
+      ];
+      b.splits = (values.split_lines ?? "")
+        .split("\n")
+        .filter((s) => s.trim())
+        .map((s) => {
+          const [category, amount] = s.split("|");
+          if (!category?.trim() || !amount?.trim())
+            throw Error("Use Category | Amount on each split line.");
+          return {
+            category: category.trim(),
+            amount: amount.trim().replace(/[₹,]/g, ""),
+            note: "",
+          };
+        });
       b.amount =
         values.kind === "expense"
           ? d(values.amount).abs().neg().toString()
@@ -251,12 +291,13 @@ export function App() {
         editor?.initial?.idempotency_key ?? values.idempotency_key;
     }
     if (resource === "accounts")
-      b.archived = editor?.initial?.archived ?? false;
+      b.archived = values.account_state === "archived";
     if (resource === "fixed_income") {
+      b.coupon_frequency = values.coupon_frequency || null;
       b.compounding = Number(values.compounding);
       b.status = editor?.initial?.status ?? "active";
     }
-    if (resource === "recurring") b.active = editor?.initial?.active ?? true;
+    if (resource === "recurring") b.active = values.reminder_state !== "paused";
     if (resource === "snapshots") b.cost_basis = values.cost_basis || null;
     if (resource === "trades") b.account_id = values.account_id || null;
     if (resource === "liabilities") b.due_on = values.due_on || null;
@@ -265,6 +306,8 @@ export function App() {
       resource === "transfer"
         ? transferSchema.parse(b)
         : schemas[resource].parse(b);
+    if (resource === "entries")
+      validatedEntry(parsed as ReturnType<typeof schemas.entries.parse>);
     if (demo) {
       if (resource === "transfer") {
         const t = parsed as ReturnType<typeof transferSchema.parse>;
@@ -481,7 +524,9 @@ export function App() {
                       )}
                     </span>
                     <div>
-                      <strong>{e.merchant}</strong>
+                      <Link to={base + "/activity/" + e.id}>
+                        <strong>{e.merchant}</strong>
+                      </Link>
                       <small>
                         {e.kind}
                         {e.source_document_id ? " · imported" : ""}
@@ -490,7 +535,22 @@ export function App() {
                   </div>
                 </td>
                 <td>
-                  <span className="tag">{e.category}</span>
+                  <span className="tag">
+                    {e.splits?.length
+                      ? "Split across " + e.splits.length + " categories"
+                      : e.category}
+                  </span>
+                  {!!e.splits?.length && (
+                    <details>
+                      <summary>View split</summary>
+                      {e.splits.map((s, i) => (
+                        <p key={i}>
+                          {s.category}: {fmt(s.amount, e.currency)}
+                        </p>
+                      ))}
+                    </details>
+                  )}
+                  {!!e.tags?.length && <small>{e.tags.join(" · ")}</small>}
                 </td>
                 <td>{w.accounts.find((a) => a.id === e.account_id)?.name}</td>
                 <td>{e.occurred_on}</td>
@@ -592,12 +652,15 @@ export function App() {
           <div className="breadcrumb">
             Workspace <ChevronRight size={14} />{" "}
             <strong>
-              {navigation.find((n) => n[0] === page)?.[1] ?? "Overview"}
+              {navigation.find((n) => n[0] === page)?.[1] ??
+                (page.startsWith("activity/")
+                  ? "Transaction details"
+                  : "Overview")}
             </strong>
           </div>
           <div className="topbar-right">
             <span className="sync-dot" />
-            {demo ? "Sample data" : "Neon connected"}
+            {demo ? "Sample data" : online ? "Cloud records loaded" : "Offline"}
             <span className="avatar small-avatar">
               {(w.profile.display_name || "Y")[0]}
             </span>
@@ -611,6 +674,12 @@ export function App() {
             </Link>
           </div>
         )}
+        {!demo && !online && (
+          <div className="demo-banner" role="status">
+            You’re offline. Your loaded records remain visible. Reconnect to
+            save changes; cloud records refresh when the connection returns.
+          </div>
+        )}
         <main id="main">
           <div className="page-heading">
             <div>
@@ -619,7 +688,10 @@ export function App() {
               </p>
               <h1>
                 {page
-                  ? navigation.find((n) => n[0] === page)?.[1]
+                  ? (navigation.find((n) => n[0] === page)?.[1] ??
+                    (page.startsWith("activity/")
+                      ? "Transaction details"
+                      : "Page not found"))
                   : "Your financial overview"}
                 <span className="heading-dot">.</span>
               </h1>
@@ -876,6 +948,158 @@ export function App() {
               </div>
             </>
           )}
+          {page.startsWith("activity/") &&
+            (() => {
+              const entry = w.entries.find((e) => e.id === page.slice(9));
+              if (!entry)
+                return (
+                  <section className="panel">
+                    <h2>Transaction not found</h2>
+                    <Link to={base + "/transactions"}>
+                      Back to transactions
+                    </Link>
+                  </section>
+                );
+              const source = w.sources.find(
+                (s) => s.id === entry.source_document_id,
+              );
+              const changes = w.audit.filter((a) => a.entity_id === entry.id);
+              return (
+                <section className="panel settings-panel">
+                  <Link to={base + "/transactions"}>Back to transactions</Link>
+                  <h2>{entry.merchant}</h2>
+                  <p>
+                    {fmt(entry.amount, entry.currency)} · {entry.occurred_on} ·{" "}
+                    {entry.kind}
+                  </p>
+                  <p>
+                    {w.accounts.find((a) => a.id === entry.account_id)?.name} ·{" "}
+                    {entry.category}
+                  </p>
+                  {entry.note && <p>{entry.note}</p>}
+                  {!!entry.tags?.length && <p>Tags: {entry.tags.join(", ")}</p>}
+                  {!!entry.splits?.length && (
+                    <ul>
+                      {entry.splits.map((s, i) => (
+                        <li key={i}>
+                          {s.category}: {fmt(s.amount, entry.currency)} {s.note}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <h3>Source evidence</h3>
+                  {source ? (
+                    <>
+                      <p>
+                        {source.name} · saved{" "}
+                        {source.created_at ? new Date(source.created_at).toLocaleString() : "date unavailable"}
+                      </p>
+                      {source.extracted_text && (
+                        <details>
+                          <summary>Read saved extracted text</summary>
+                          <pre
+                            style={{
+                              whiteSpace: "pre-wrap",
+                              overflowWrap: "anywhere",
+                            }}
+                          >
+                            {source.extracted_text}
+                          </pre>
+                        </details>
+                      )}
+                      {source.storage_key && (
+                        <button
+                          className="secondary"
+                          onClick={async () => {
+                            try {
+                              const result = await request<{ url: string }>(
+                                "/documents/" + source.id + "/url",
+                              );
+                              window.open(
+                                result.url,
+                                "_blank",
+                                "noopener,noreferrer",
+                              );
+                            } catch (e) {
+                              setNotice((e as Error).message);
+                            }
+                          }}
+                        >
+                          Open saved original
+                        </button>
+                      )}
+                      <Link to={base + "/imports"}>View document library</Link>
+                    </>
+                  ) : (
+                    <p className="muted">
+                      This transaction has no attached source document.
+                    </p>
+                  )}
+                  <h3>Saved activity</h3>
+                  {changes.length ? (
+                    changes.map((a) => (
+                      <details key={a.id}>
+                        <summary>
+                          {a.action.replaceAll("_", " ")} ·{" "}
+                          {new Date(a.occurred_at).toLocaleString()}
+                        </summary>
+                        {a.before_data && a.after_data && (
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Field</th>
+                                <th>Before</th>
+                                <th>After</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.keys(a.after_data)
+                                .filter(
+                                  (k) =>
+                                    ![
+                                      "id",
+                                      "owner_id",
+                                      "idempotency_key",
+                                      "created_at",
+                                      "updated_at",
+                                    ].includes(k) &&
+                                    JSON.stringify(a.before_data?.[k]) !==
+                                      JSON.stringify(a.after_data?.[k]),
+                                )
+                                .map((k) => (
+                                  <tr key={k}>
+                                    <td>{k.replaceAll("_", " ")}</td>
+                                    <td>
+                                      {JSON.stringify(
+                                        a.before_data?.[k] ?? "—",
+                                      )}
+                                    </td>
+                                    <td>
+                                      {JSON.stringify(a.after_data?.[k] ?? "—")}
+                                    </td>
+                                  </tr>
+                                ))}
+                            </tbody>
+                          </table>
+                        )}
+                      </details>
+                    ))
+                  ) : (
+                    <p className="muted">
+                      No retained activity for this transaction.
+                    </p>
+                  )}
+                </section>
+              );
+            })()}
+          {page &&
+            !page.startsWith("activity/") &&
+            !navigation.some((n) => n[0] === page) && (
+              <section className="panel">
+                <p>This page does not exist.</p>
+                <Link to={base}>Back to overview</Link>
+              </section>
+            )}
           {page === "transactions" && (
             <section className="panel">
               <div className="filters">
@@ -940,7 +1164,17 @@ export function App() {
                   (e) =>
                     e.occurred_on.startsWith(month) &&
                     (kind === "all" || e.kind === kind) &&
-                    (e.merchant + " " + e.category + " " + e.note)
+                    (
+                      e.merchant +
+                      " " +
+                      e.category +
+                      " " +
+                      e.note +
+                      " " +
+                      (e.tags ?? []).join(" ") +
+                      " " +
+                      (e.splits ?? []).map((s) => s.category).join(" ")
+                    )
                       .toLowerCase()
                       .includes(search.toLowerCase()),
                 ),
@@ -1051,7 +1285,7 @@ export function App() {
                   .filter((b) => b.period === month)
                   .map((b) => {
                     const used = spending(
-                        w.entries.filter(
+                        expandEntries(w.entries).filter(
                           (e) =>
                             e.currency === b.currency &&
                             e.category === b.category &&
@@ -1243,6 +1477,76 @@ export function App() {
                     <small>
                       {f.start_on} → {f.maturity_on}
                     </small>
+                    {f.payout === "periodic" && (
+                      <>
+                        <h4>Upcoming interest dates</h4>
+                        {couponSchedule(f).map((c) => (
+                          <p key={c.date}>
+                            {c.date} · estimated {fmt(c.estimate, f.currency)}
+                          </p>
+                        ))}
+                        {!f.coupon_frequency && (
+                          <p className="muted small">
+                            Add the documented payment frequency to see a
+                            schedule.
+                          </p>
+                        )}
+                        <p className="muted small">
+                          Simple periodic estimates from principal and annual
+                          rate. Tax, day count and issuer terms may change the
+                          actual payment.
+                        </p>
+                        {f.status !== "closed" && (
+                          <button
+                            className="secondary full spaced"
+                            onClick={() =>
+                              setCustom({
+                                title: "Record received interest / coupon",
+                                fields: [
+                                  {
+                                    key: "account_id",
+                                    label: "Receiving account",
+                                    options: w.accounts
+                                      .filter(
+                                        (a) =>
+                                          !a.archived &&
+                                          a.currency === f.currency,
+                                      )
+                                      .map((a) => ({
+                                        value: a.id,
+                                        label: a.name,
+                                      })),
+                                  },
+                                  {
+                                    key: "amount",
+                                    label: "Actual interest received",
+                                    type: "number",
+                                  },
+                                  {
+                                    key: "occurred_on",
+                                    label: "Received on",
+                                    type: "date",
+                                    value: today(),
+                                  },
+                                ],
+                                save: async (v) => {
+                                  await mutate(
+                                    "/fixed-income/" + f.id + "/interest",
+                                    "POST",
+                                    v,
+                                  );
+                                  setNotice(
+                                    "Actual interest recorded. Principal stays invested.",
+                                  );
+                                },
+                              })
+                            }
+                          >
+                            Record received interest
+                          </button>
+                        )}
+                      </>
+                    )}
                     {f.status !== "closed" && (
                       <button
                         className="secondary full spaced"
@@ -1351,26 +1655,117 @@ export function App() {
                     <div>
                       <strong>{r.merchant}</strong>
                       <small>
-                        {r.frequency} · Next due {r.next_due_on}
+                        {r.frequency} · Next due {r.next_due_on} ·{" "}
+                        {r.active
+                          ? r.next_due_on <= today()
+                            ? "Due now"
+                            : "Active"
+                          : "Paused"}
                       </small>
                     </div>
                     <strong>{fmt(r.amount, r.currency)}</strong>
                     {actions("recurring", r)}
                     <button
                       className="secondary"
+                      disabled={!r.active}
                       onClick={() =>
-                        setEditor({
-                          resource: "entries",
-                          initial: {
-                            merchant: r.merchant,
-                            category: r.category,
-                            amount: r.amount,
-                            kind: "expense",
+                        setCustom({
+                          title: "Record payment for " + r.merchant,
+                          fields: [
+                            {
+                              key: "account_id",
+                              label: "Paying account",
+                              options: w.accounts
+                                .filter(
+                                  (a) =>
+                                    !a.archived && a.currency === r.currency,
+                                )
+                                .map((a) => ({ value: a.id, label: a.name })),
+                            },
+                            {
+                              key: "occurred_on",
+                              label: "Actual payment date",
+                              type: "date",
+                              value: today(),
+                            },
+                          ],
+                          save: async (v) => {
+                            if (demo) {
+                              const entry: Entry = {
+                                id: crypto.randomUUID(),
+                                account_id: v.account_id,
+                                occurred_on: v.occurred_on,
+                                amount: d(r.amount).neg().toString(),
+                                currency: r.currency,
+                                kind: "expense",
+                                category: r.category,
+                                merchant: r.merchant,
+                                note: "Recurring payment",
+                                idempotency_key: crypto.randomUUID(),
+                                source_document_id: null,
+                                source_line_key: null,
+                                transfer_group_id: null,
+                              };
+                              setSample((s) => ({
+                                ...s,
+                                entries: [...s.entries, entry],
+                                recurring: s.recurring.map((x) =>
+                                  x.id === r.id
+                                    ? {
+                                        ...x,
+                                        next_due_on: advanceDue(
+                                          r.next_due_on,
+                                          r.frequency,
+                                          r.anchor_day ?? undefined,
+                                        ),
+                                      }
+                                    : x,
+                                ),
+                              }));
+                            } else
+                              await mutate(
+                                "/recurring/" + r.id + "/payment",
+                                "POST",
+                                { ...v, due_on: r.next_due_on },
+                              );
+                            setNotice(
+                              "Payment saved. The reminder moved to its next due date.",
+                            );
                           },
                         })
                       }
                     >
                       Record payment
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={async () => {
+                        try {
+                          if (demo)
+                            setSample((s) => ({
+                              ...s,
+                              recurring: s.recurring.map((x) =>
+                                x.id === r.id ? { ...x, active: !x.active } : x,
+                              ),
+                            }));
+                          else
+                            await mutate(
+                              "/data/recurring/" + r.id,
+                              "PATCH",
+                              schemas.recurring.parse({
+                                ...r,
+                                active: !r.active,
+                              }),
+                            );
+                          setNotice(
+                            r.active ? "Reminder paused." : "Reminder resumed.",
+                          );
+                        } catch (e) {
+                          setNotice((e as Error).message);
+                        }
+                      }}
+                    >
+                      {r.active ? "Pause" : "Resume"}
                     </button>
                   </div>
                 ))}
@@ -1417,7 +1812,11 @@ export function App() {
                       {b.category}:{" "}
                       {fmt(
                         d(b.amount).minus(
-                          spending(es.filter((e) => e.category === b.category)),
+                          spending(
+                            expandEntries(es).filter(
+                              (e) => e.category === b.category,
+                            ),
+                          ),
                         ),
                         b.currency,
                       )}{" "}
@@ -1506,6 +1905,10 @@ export function App() {
                 refresh={refresh}
                 notify={setNotice}
               />
+              <SecuritySettings
+                demo={demo}
+                currentSession={session.data?.session.id}
+              />
               <section className="panel spaced">
                 <h2>Activity history</h2>
                 {w.audit.slice(0, 20).map((a) => (
@@ -1514,6 +1917,49 @@ export function App() {
                       {a.action} · {a.entity_type}
                     </strong>
                     <small>{new Date(a.occurred_at).toLocaleString()}</small>
+                    {a.before_data && a.after_data && (
+                      <details>
+                        <summary>View changes</summary>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Field</th>
+                              <th>Before</th>
+                              <th>After</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {Object.keys(a.after_data)
+                              .filter(
+                                (k) =>
+                                  ![
+                                    "id",
+                                    "created_at",
+                                    "idempotency_key",
+                                    "updated_at",
+                                  ].includes(k) &&
+                                  JSON.stringify(a.before_data?.[k]) !==
+                                    JSON.stringify(a.after_data?.[k]),
+                              )
+                              .map((k) => (
+                                <tr key={k}>
+                                  <td>{k.replaceAll("_", " ")}</td>
+                                  <td>
+                                    {typeof a.before_data?.[k] === "object"
+                                      ? JSON.stringify(a.before_data[k])
+                                      : String(a.before_data?.[k] ?? "—")}
+                                  </td>
+                                  <td>
+                                    {typeof a.after_data?.[k] === "object"
+                                      ? JSON.stringify(a.after_data[k])
+                                      : String(a.after_data?.[k] ?? "—")}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </details>
+                    )}
                   </div>
                 ))}
                 {!w.audit.length && (
@@ -1524,6 +1970,7 @@ export function App() {
           )}
           <footer>
             KoshVista <span>Clarity for today. Confidence for tomorrow.</span>
+            <Link to="/privacy">Privacy & data</Link>
             <a
               href="https://github.com/Ritik0712-ai/koshvista"
               target="_blank"

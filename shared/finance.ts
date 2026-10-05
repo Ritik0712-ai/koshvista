@@ -12,6 +12,21 @@ export const today = () => {
     String(t.getDate()).padStart(2, "0")
   );
 };
+export function advanceDue(
+  on: string,
+  frequency: "weekly" | "monthly" | "yearly",
+  anchorDay = Number(on.slice(8, 10)),
+) {
+  const dt = new Date(on + "T00:00:00Z");
+  if (frequency === "weekly") dt.setUTCDate(dt.getUTCDate() + 7);
+  else {
+    const year = dt.getUTCFullYear() + (frequency === "yearly" ? 1 : 0),
+      month = dt.getUTCMonth() + (frequency === "monthly" ? 1 : 0);
+    const last = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    dt.setTime(Date.UTC(year, month, Math.min(anchorDay, last)));
+  }
+  return dt.toISOString().slice(0, 10);
+}
 export function formatMoney(
   value: Decimal.Value,
   currency = "INR",
@@ -26,7 +41,12 @@ export function formatMoney(
 }
 export function balance(a: Account, entries: Entry[], on = today()) {
   return entries
-    .filter((e) => e.account_id === a.id && e.occurred_on <= on)
+    .filter(
+      (e) =>
+        e.account_id === a.id &&
+        e.occurred_on >= a.opening_date &&
+        e.occurred_on <= on,
+    )
     .reduce(
       (v, e) => v.plus(e.amount),
       d(a.opening_date <= on ? a.opening_balance : 0),
@@ -79,6 +99,43 @@ export function fdValue(f: FixedIncome, on = f.maturity_on) {
           .plus(rate.div(f.compounding))
           .pow(f.compounding * years),
       );
+}
+export function couponSchedule(f: FixedIncome, on = today()) {
+  if (f.payout !== "periodic" || !f.coupon_frequency || f.status === "closed")
+    return [];
+  const periods = { monthly: 12, quarterly: 4, half_yearly: 2, yearly: 1 }[
+    f.coupon_frequency
+  ];
+  const months = 12 / periods,
+    start = new Date(f.start_on + "T00:00:00Z"),
+    end = new Date(on + "T00:00:00Z");
+  const elapsed =
+    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    end.getUTCMonth() -
+    start.getUTCMonth();
+  const first = Math.max(1, Math.floor(elapsed / months));
+  const rows = [];
+  for (let n = first; n < first + 8; n++) {
+    const month = start.getUTCMonth() + n * months,
+      last = new Date(
+        Date.UTC(start.getUTCFullYear(), month + 1, 0),
+      ).getUTCDate();
+    const date = new Date(
+      Date.UTC(
+        start.getUTCFullYear(),
+        month,
+        Math.min(start.getUTCDate(), last),
+      ),
+    )
+      .toISOString()
+      .slice(0, 10);
+    if (date >= on && date <= f.maturity_on)
+      rows.push({
+        date,
+        estimate: d(f.principal).mul(f.annual_rate).div(100).div(periods),
+      });
+  }
+  return rows.slice(0, 6);
 }
 export function holdings(w: Workspace, on = today()) {
   return w.instruments.map((i) => {
@@ -168,9 +225,25 @@ export function monthSeries(entries: Entry[], months = 6) {
     };
   });
 }
+export function expandEntries(entries: Entry[]): Entry[] {
+  return entries.flatMap((e) =>
+    e.splits?.length
+      ? e.splits.map((s, i) => ({
+          ...e,
+          id: e.id + ":" + i,
+          amount: d(s.amount)
+            .mul(d(e.amount).isNegative() ? -1 : 1)
+            .toString(),
+          category: s.category,
+          note: s.note || e.note,
+          splits: [],
+        }))
+      : [e],
+  );
+}
 export function categoryTotals(entries: Entry[]) {
   const m = new Map<string, Decimal>();
-  entries
+  expandEntries(entries)
     .filter((e) => e.kind === "expense" || e.kind === "refund")
     .forEach((e) =>
       m.set(e.category, (m.get(e.category) ?? d(0)).plus(d(e.amount).neg())),

@@ -8,6 +8,9 @@ import {
   fdValue,
   csv,
   d,
+  advanceDue,
+  categoryTotals,
+  couponSchedule,
 } from "../shared/finance";
 import {
   EMPTY,
@@ -167,6 +170,36 @@ describe("Financial invariants", () => {
     expect(netWorth(w).toString()).toBe("10000");
     expect(income(w.entries).toString()).toBe("0");
   });
+  it("allocates a split once while preserving its full account movement", () => {
+    const e = {
+      ...entry("-1000", "expense"),
+      splits: [
+        { category: "Groceries", amount: "600", note: "" },
+        { category: "Shopping", amount: "400", note: "" },
+      ],
+    };
+    expect(spending([e]).toString()).toBe("1000");
+    expect(balance(account, [e]).toString()).toBe("0");
+    expect(categoryTotals([e])).toEqual([
+      { name: "Groceries", value: 600 },
+      { name: "Shopping", value: 400 },
+    ]);
+  });
+  it("preserves the original monthly due day across short months", () => {
+    expect(advanceDue("2026-01-31", "monthly", 31)).toBe("2026-02-28");
+    expect(advanceDue("2026-02-28", "monthly", 31)).toBe("2026-03-31");
+    expect(advanceDue("2024-02-29", "yearly", 29)).toBe("2025-02-28");
+  });
+  it("does not double count entries already covered by the opening balance", () => {
+    const a = {
+      ...account,
+      opening_date: "2026-03-01",
+      opening_balance: "800",
+    };
+    expect(
+      balance(a, [entry("-200", "expense")], "2026-03-02").toString(),
+    ).toBe("800");
+  });
   it("neutralises spreadsheet formulas", () =>
     expect(csv([{ merchant: '=HYPERLINK("bad")', note: "normal" }])).toContain(
       "'=HYPERLINK",
@@ -214,5 +247,35 @@ describe("Encrypted backup", () => {
   });
   it("rejects short passwords", async () => {
     await expect(encrypt({}, "short")).rejects.toThrow("12 characters");
+  });
+});
+
+describe("Documented coupon schedules", () => {
+  it("keeps month-end dates and excludes matured periods", () => {
+    const f = {
+      id: "test",
+      name: "Test",
+      kind: "bond" as const,
+      issuer: "Test",
+      principal: "1200",
+      currency: "INR",
+      annual_rate: "12",
+      start_on: "2026-01-31",
+      maturity_on: "2026-04-30",
+      compounding: 1,
+      payout: "periodic" as const,
+      coupon_frequency: "monthly" as const,
+      status: "active" as const,
+      note: "",
+      funding_account_id: null,
+      idempotency_key: crypto.randomUUID(),
+    };
+    expect(couponSchedule(f, "2026-02-01").map((r) => r.date)).toEqual([
+      "2026-02-28",
+      "2026-03-31",
+      "2026-04-30",
+    ]);
+    expect(couponSchedule(f, "2026-02-01")[0].estimate.toString()).toBe("12");
+    expect(couponSchedule(f, "2026-05-01")).toEqual([]);
   });
 });

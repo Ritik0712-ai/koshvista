@@ -23,7 +23,7 @@ import {
   amount,
   date,
 } from "../shared/validation";
-import { d, money } from "../shared/finance";
+import { d, money, advanceDue } from "../shared/finance";
 import { tx, insert, audit, publicRow, tables } from "./db";
 import type { Resource } from "../shared/types";
 import type { PoolClient } from "pg";
@@ -298,12 +298,53 @@ app.post("/api/import", async (c) => {
     owner = c.get("owner");
   return c.json(
     await tx(owner, async (db) => {
-      const account = await getOwned(db, "accounts", owner, b.account_id, true);
+      await db.query(
+        "SELECT id FROM app.accounts WHERE owner_id=$1 AND id=ANY($2::uuid[]) ORDER BY id FOR UPDATE",
+        [
+          owner,
+          [
+            b.account_id,
+            ...b.rows.flatMap((r) =>
+              r.target_account_id ? [r.target_account_id] : [],
+            ),
+          ],
+        ],
+      );
+      const account = await getOwned(db, "accounts", owner, b.account_id);
       if (account.archived)
         throw new HTTPException(422, { message: "Choose an active account." });
       const source = (await saveSource(db, owner, b.source)).id;
       let posted = 0;
       for (const row of b.rows) {
+        const kind = row.kind ?? (d(row.amount).lt(0) ? "expense" : "income");
+        if (
+          (kind === "expense" && d(row.amount).gte(0)) ||
+          (["income", "refund"].includes(kind) && d(row.amount).lte(0))
+        )
+          throw new HTTPException(422, {
+            message:
+              "Check the signed amount and type on row " + row.line + ".",
+          });
+        let target: Record<string, any> | undefined;
+        if (kind === "transfer") {
+          if (!row.target_account_id || row.target_account_id === account.id)
+            throw new HTTPException(422, {
+              message:
+                "Choose the other account for transfer row " + row.line + ".",
+            });
+          const destination = await getOwned(
+            db,
+            "accounts",
+            owner,
+            row.target_account_id,
+          );
+          target = destination;
+          if (destination.archived || destination.currency !== account.currency)
+            throw new HTTPException(422, {
+              message:
+                "Transfer accounts must be active and have the same currency.",
+            });
+        }
         // Preserve repeated same-day transactions in one statement using its stable source line.
         const idempotency =
           "import:" + b.account_id + ":" + b.source.sha256 + ":" + row.line;
@@ -318,12 +359,14 @@ app.post("/api/import", async (c) => {
           [owner, b.account_id, row.date, row.amount, row.description, source],
         );
         if (overlap.rowCount) continue;
+        const group = target ? randomUUID() : null;
         await insert(db, "entries", owner, {
           account_id: b.account_id,
           occurred_on: row.date,
           amount: row.amount,
           currency: account.currency,
-          kind: d(row.amount).lt(0) ? "expense" : "income",
+          kind,
+          transfer_group_id: group,
           category: row.category,
           merchant: row.description,
           note: "Imported from " + b.source.name,
@@ -331,6 +374,21 @@ app.post("/api/import", async (c) => {
           source_line_key: String(row.line),
           idempotency_key: idempotency,
         });
+        if (target)
+          await insert(db, "entries", owner, {
+            account_id: target.id,
+            occurred_on: row.date,
+            amount: d(row.amount).neg().toString(),
+            currency: account.currency,
+            kind: "transfer",
+            transfer_group_id: group,
+            category: "Transfer",
+            merchant: account.name,
+            note: "Paired with import from " + b.source.name,
+            source_document_id: source,
+            source_line_key: row.line + ":counter",
+            idempotency_key: idempotency + ":counter",
+          });
         posted++;
       }
       const job = await insert(db, "imports", owner, {
@@ -471,6 +529,106 @@ app.post("/api/fixed-income/:id/settle", async (c) => {
     }),
   );
 });
+app.post("/api/fixed-income/:id/interest", async (c) => {
+  const owner = c.get("owner"),
+    id = z.string().uuid().parse(c.req.param("id"));
+  const b = z
+    .object({
+      account_id: z.string().uuid(),
+      occurred_on: date,
+      amount: amount.refine((v) => d(v).gt(0)),
+      idempotency_key: z.string().uuid(),
+    })
+    .parse(await c.req.json());
+  return c.json(
+    await tx(owner, async (db) => {
+      const f = await getOwned(db, "fixed_income", owner, id, true);
+      const key = "coupon:" + id + ":" + b.idempotency_key;
+      const old = await db.query(
+        "SELECT id FROM app.entries WHERE owner_id=$1 AND idempotency_key=$2",
+        [owner, key],
+      );
+      if (old.rows[0]) return { duplicate: true };
+      const a = await getOwned(db, "accounts", owner, b.account_id);
+      if (
+        f.status === "closed" ||
+        f.payout !== "periodic" ||
+        a.archived ||
+        a.currency !== f.currency ||
+        b.occurred_on < f.start_on
+      )
+        throw new HTTPException(422, {
+          message:
+            "Check the periodic holding, payment date and receiving account.",
+        });
+      await insert(db, "entries", owner, {
+        account_id: a.id,
+        occurred_on: b.occurred_on,
+        amount: b.amount,
+        currency: f.currency,
+        kind: "income",
+        category: "Interest",
+        merchant: f.issuer,
+        note: "Actual interest / coupon for " + f.name,
+        idempotency_key: key,
+      });
+      await audit(db, owner, "record_interest", "fixed_income", id);
+      return { duplicate: false };
+    }),
+    201,
+  );
+});
+app.post("/api/recurring/:id/payment", async (c) => {
+  const owner = c.get("owner"),
+    id = z.string().uuid().parse(c.req.param("id"));
+  const b = z
+    .object({ account_id: z.string().uuid(), due_on: date, occurred_on: date })
+    .parse(await c.req.json());
+  return c.json(
+    await tx(owner, async (db) => {
+      const r = await getOwned(db, "recurring", owner, id, true);
+      const key = "recurring:" + id + ":" + b.due_on;
+      const previous = await db.query(
+        "SELECT id FROM app.entries WHERE owner_id=$1 AND idempotency_key=$2",
+        [owner, key],
+      );
+      if (previous.rows[0]) return { duplicate: true };
+      if (!r.active || b.due_on !== r.next_due_on)
+        throw new HTTPException(409, {
+          message:
+            "This reminder changed. Refresh before recording its payment.",
+        });
+      const account = await getOwned(db, "accounts", owner, b.account_id);
+      if (account.archived || account.currency !== r.currency)
+        throw new HTTPException(422, {
+          message: "Choose an active account in the bill currency.",
+        });
+      await insert(db, "entries", owner, {
+        account_id: account.id,
+        occurred_on: b.occurred_on,
+        amount: d(r.amount).neg().toString(),
+        currency: r.currency,
+        kind: "expense",
+        category: r.category,
+        merchant: r.merchant,
+        note: "Recurring bill due " + b.due_on,
+        idempotency_key: key,
+      });
+      const next = advanceDue(
+        r.next_due_on,
+        r.frequency,
+        r.anchor_day ?? Number(r.next_due_on.slice(8, 10)),
+      );
+      await db.query(
+        "UPDATE app.recurring SET next_due_on=$3 WHERE owner_id=$1 AND id=$2",
+        [owner, id, next],
+      );
+      await audit(db, owner, "record_payment", "recurring", id);
+      return { duplicate: false, next_due_on: next };
+    }),
+    201,
+  );
+});
 app.post("/api/data/:resource", async (c) => {
   const resource = c.req.param("resource") as Resource;
   if (!Object.hasOwn(schemas, resource)) throw new HTTPException(404);
@@ -482,6 +640,8 @@ app.post("/api/data/:resource", async (c) => {
   return c.json(
     await tx(owner, async (db) => {
       await profile(db, owner);
+      if (resource === "recurring")
+        body.anchor_day ??= Number(String(body.next_due_on).slice(8, 10));
       if (
         resource === "entries" ||
         resource === "trades" ||
@@ -620,6 +780,11 @@ app.patch("/api/data/:resource/:id", async (c) => {
   return c.json(
     await tx(owner, async (db) => {
       const old = await getOwned(db, resource, owner, id, true);
+      if (resource === "recurring")
+        body.anchor_day =
+          body.next_due_on === old.next_due_on
+            ? (old.anchor_day ?? Number(old.next_due_on.slice(8, 10)))
+            : Number(String(body.next_due_on).slice(8, 10));
       if (resource === "entries") {
         if (old.kind === "transfer" || old.kind === "investment")
           throw new HTTPException(422, {
@@ -683,11 +848,15 @@ app.patch("/api/data/:resource/:id", async (c) => {
           });
       }
       const keys = Object.keys(body);
+      if (resource === "entries") body.splits = JSON.stringify(body.splits);
       const { rows } = await db.query(
         `UPDATE app.${resource} SET ${keys.map((k, i) => k + "=$" + (i + 3)).join(",")} WHERE owner_id=$1 AND id=$2 RETURNING *`,
         [owner, id, ...Object.values(body)],
       );
-      await audit(db, owner, "update", resource, id);
+      await audit(db, owner, "update", resource, id, {
+        before: publicRow(old),
+        after: publicRow(rows[0]),
+      });
       return publicRow(rows[0]);
     }),
   );
@@ -938,7 +1107,11 @@ app.post("/api/restore", async (c) => {
         )
         .max(100000)
         .parse(body.data.entries ?? []);
-      for (const entry of entries) await insert(db, "entries", owner, entry);
+      for (const entry of entries) {
+        if (["expense", "refund", "income", "adjustment"].includes(entry.kind))
+          validatedEntry(entry as z.infer<typeof schemas.entries>);
+        await insert(db, "entries", owner, entry);
+      }
       // Validate both transfer legs before committing a restored archive.
       const malformed = await db.query(
         "SELECT transfer_group_id FROM app.entries WHERE owner_id=$1 AND kind='transfer' GROUP BY transfer_group_id HAVING count(*)<>2 OR sum(amount)<>0 OR count(DISTINCT currency)<>1 OR count(DISTINCT account_id)<>2",

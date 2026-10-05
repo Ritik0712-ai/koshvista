@@ -35,6 +35,14 @@ export function fields(resource: Resource | "transfer", w: Workspace): Field[] {
   switch (resource) {
     case "accounts":
       return [
+        {
+          key: "account_state",
+          label: "Account status",
+          options: [
+            { value: "active", label: "Active" },
+            { value: "archived", label: "Archived — keep history" },
+          ],
+        },
         { key: "name", label: "Account name" },
         {
           key: "kind",
@@ -76,6 +84,17 @@ export function fields(resource: Resource | "transfer", w: Workspace): Field[] {
         { key: "merchant", label: "Merchant or description" },
         category,
         { key: "note", label: "Note", optional: true },
+        {
+          key: "tags_text",
+          label: "Tags (separate with commas)",
+          optional: true,
+        },
+        {
+          key: "split_lines",
+          label: "Split categories (one Category | Amount per line)",
+          type: "textarea",
+          optional: true,
+        },
       ];
     case "transfer":
       return [
@@ -151,6 +170,15 @@ export function fields(resource: Resource | "transfer", w: Workspace): Field[] {
             ...ac,
           ],
         },
+        {
+          key: "coupon_frequency",
+          label: "Periodic interest schedule (if documented)",
+          optional: true,
+          options: [
+            { value: "", label: "Not recorded / cumulative" },
+            ...options(["monthly", "quarterly", "half_yearly", "yearly"]),
+          ],
+        },
         { key: "name", label: "Holding name" },
         { key: "kind", label: "Type", options: options(["fd", "bond"]) },
         { key: "issuer", label: "Issuer" },
@@ -200,6 +228,14 @@ export function fields(resource: Resource | "transfer", w: Workspace): Field[] {
       ];
     case "recurring":
       return [
+        {
+          key: "reminder_state",
+          label: "Reminder status",
+          options: [
+            { value: "active", label: "Active" },
+            { value: "paused", label: "Paused" },
+          ],
+        },
         { key: "merchant", label: "Bill or subscription" },
         category,
         amount,
@@ -277,7 +313,18 @@ export function Editor({
                       name={f.key}
                       required={!f.optional}
                       defaultValue={String(
-                        initial[f.key] ?? f.value ?? f.options[0]?.value ?? "",
+                        f.key === "account_state"
+                          ? initial.archived
+                            ? "archived"
+                            : "active"
+                          : f.key === "reminder_state"
+                            ? initial.active === false
+                              ? "paused"
+                              : "active"
+                            : (initial[f.key] ??
+                              f.value ??
+                              f.options[0]?.value ??
+                              ""),
                       )}
                     >
                       {f.options.map((o) => (
@@ -286,18 +333,47 @@ export function Editor({
                         </option>
                       ))}
                     </select>
+                  ) : f.type === "textarea" ? (
+                    <textarea
+                      name={f.key}
+                      rows={4}
+                      defaultValue={
+                        f.key === "split_lines"
+                          ? (
+                              (initial.splits as
+                                | { category: string; amount: string }[]
+                                | undefined) ?? []
+                            )
+                              .map((s) => s.category + " | " + s.amount)
+                              .join("\n")
+                          : String(initial[f.key] ?? f.value ?? "")
+                      }
+                    />
                   ) : (
                     <input
                       name={f.key}
                       type={f.type ?? "text"}
                       step="any"
                       required={!f.optional}
-                      defaultValue={String(initial[f.key] ?? f.value ?? "")}
+                      defaultValue={
+                        f.key === "tags_text"
+                          ? ((initial.tags as string[] | undefined) ?? []).join(
+                              ", ",
+                            )
+                          : String(initial[f.key] ?? f.value ?? "")
+                      }
                     />
                   )}
                 </label>
               ))}
             </div>
+            {fs.some((f) => f.key === "split_lines") && (
+              <p className="muted small">
+                For example: Groceries | 600, then Household | 400 on the next
+                line. Split amounts must add up to your full expense or refund.
+                Leave blank for one category.
+              </p>
+            )}
             {error && (
               <p role="alert" className="error">
                 {error}

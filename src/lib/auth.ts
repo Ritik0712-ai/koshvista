@@ -8,6 +8,10 @@ export async function request<T = unknown>(
   body?: unknown,
 ): Promise<T> {
   if (!auth) throw new Error("Neon sign-in is not configured yet.");
+  if (!navigator.onLine)
+    throw new Error(
+      "You’re offline. Reconnect before saving or loading cloud records.",
+    );
   // Neon injects its API JWT into the managed getSession response.
   const session = await auth.getSession();
   const token = session.data?.session?.token;

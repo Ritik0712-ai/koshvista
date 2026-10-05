@@ -27,6 +27,8 @@ export interface Entry {
   source_line_key: string | null;
   idempotency_key: string;
   created_at?: string;
+  tags?: string[];
+  splits?: { category: string; amount: string; note: string }[];
 }
 export interface Budget {
   id: string;
@@ -66,6 +68,7 @@ export interface Snapshot {
 export interface FixedIncome {
   id: string;
   settled_on?: string | null;
+  coupon_frequency?: "monthly" | "quarterly" | "half_yearly" | "yearly" | null;
   funding_entry_id?: string | null;
   name: string;
   kind: "fd" | "bond";
@@ -89,6 +92,7 @@ export interface Liability {
   note: string;
 }
 export interface RecurringRule {
+  anchor_day?: number | null;
   id: string;
   merchant: string;
   category: string;
@@ -123,6 +127,8 @@ export interface ImportJob {
   created_at?: string;
 }
 export interface Audit {
+  before_data?: Record<string, unknown> | null;
+  after_data?: Record<string, unknown> | null;
   id: string;
   action: string;
   entity_type: string;
@@ -172,6 +178,8 @@ export interface Candidate {
   duplicate: boolean;
   error?: string;
   ai_score?: number;
+  kind?: EntryKind;
+  target_account_id?: string;
 }
 export const CATEGORIES = [
   "Food & dining",

@@ -183,6 +183,21 @@ export function BackupPage({
         >
           {auto ? "Pause automatic backups" : "Enable automatic backups"}
         </button>
+        <button
+          className="secondary"
+          disabled={busy}
+          onClick={async () => {
+            const { driveDisconnect } = await import("./lib/drive");
+            driveDisconnect();
+            setAuto(false);
+            setArchives([]);
+            notify(
+              "Drive disconnected in this browser. Existing backups remain in your Drive.",
+            );
+          }}
+        >
+          Disconnect Drive in this browser
+        </button>
       </div>
       <p className="muted small">
         Automatic backup runs after changes while the app remains open and
