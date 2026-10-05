@@ -116,7 +116,73 @@ export async function extract(
         onProgress(m.status + " " + Math.round((m.progress ?? 0) * 100) + "%"),
     });
     check();
-    return (await worker.recognize(image)).data.text;
+    const original = (await worker.recognize(image)).data.text;
+    check();
+    // Dark broker screens hide coloured prices from OCR. Re-read a high-contrast crop locally.
+    let bitmap: ImageBitmap | undefined;
+    const source =
+      image instanceof File ? (bitmap = await createImageBitmap(image)) : image;
+    try {
+      const canvas = document.createElement("canvas"),
+        scale = Math.min(1, 3000 / Math.max(source.width, source.height));
+      canvas.width = Math.round(source.width * scale);
+      canvas.height = Math.round(source.height * scale);
+      const context = canvas.getContext("2d", { willReadFrequently: true })!;
+      context.drawImage(source, 0, 0, canvas.width, canvas.height);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      let dark = 0,
+        minX = canvas.width,
+        minY = canvas.height,
+        maxX = 0,
+        maxY = 0;
+      for (let y = 0; y < canvas.height; y++)
+        for (let x = 0; x < canvas.width; x++) {
+          const p = (y * canvas.width + x) * 4;
+          const brightness =
+            (pixels.data[p] + pixels.data[p + 1] + pixels.data[p + 2]) / 3;
+          if (brightness < 35) {
+            dark++;
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+            minY = Math.min(minY, y);
+            maxY = Math.max(maxY, y);
+          }
+        }
+      if (dark / (canvas.width * canvas.height) < 0.25) return original;
+      const crop = document.createElement("canvas");
+      crop.width = maxX - minX + 1;
+      crop.height = maxY - minY + 1;
+      const cropContext = crop.getContext("2d", { willReadFrequently: true })!;
+      cropContext.drawImage(
+        canvas,
+        minX,
+        minY,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        crop.width,
+        crop.height,
+      );
+      const contrast = cropContext.getImageData(0, 0, crop.width, crop.height);
+      for (let p = 0; p < contrast.data.length; p += 4) {
+        const brightness =
+          (contrast.data[p] + contrast.data[p + 1] + contrast.data[p + 2]) / 3;
+        const value = brightness < 55 ? 255 : 0;
+        contrast.data[p] = contrast.data[p + 1] = contrast.data[p + 2] = value;
+      }
+      cropContext.putImageData(contrast, 0, 0);
+      onProgress("Checking coloured values on a dark screenshot…");
+      const enhanced = (await worker.recognize(crop)).data.text;
+      check();
+      const decimalCount = (s: string) =>
+        (s.match(/\d[\d,]*\.\d{2}/g) ?? []).length;
+      return decimalCount(enhanced) > decimalCount(original)
+        ? enhanced
+        : original;
+    } finally {
+      bitmap?.close();
+    }
   };
   try {
     if (file.type === "application/pdf") {

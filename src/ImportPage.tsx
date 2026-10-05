@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { Upload, FileText, Plus, CheckCircle2 } from "lucide-react";
-import type { Workspace, Candidate, Resource } from "../shared/types";
+import type {
+  Workspace,
+  Candidate,
+  Resource,
+  SourceDocument,
+} from "../shared/types";
 import { CATEGORIES } from "../shared/types";
 import { hash, parseCSV, parseStatementText } from "./lib/importer";
 import { request, openSourceOriginal } from "./lib/auth";
@@ -36,6 +41,7 @@ export function ImportPage({
   );
   const [file, setFile] = useState<File | null>(null),
     [selectedFiles, setSelectedFiles] = useState<File[]>([]),
+    [savedSource, setSavedSource] = useState<SourceDocument | null>(null),
     [text, setText] = useState(""),
     [rows, setRows] = useState<Candidate[]>([]),
     [account, setAccount] = useState(
@@ -58,6 +64,7 @@ export function ImportPage({
       setStatus((e as Error).message);
       return;
     }
+    setSavedSource(null);
     setSelectedFiles(files);
     setFile(null);
     setSaved(false);
@@ -78,6 +85,14 @@ export function ImportPage({
         password,
       );
       setText(result.text);
+      if (
+        type === "statement" &&
+        (/(?:portfolio|investment[_ -]*holdings)/i.test(
+          files.map((f) => f.name).join(" "),
+        ) ||
+          (/holdings/i.test(result.text) && /\bshares\b/i.test(result.text)))
+      )
+        setType("portfolio");
       setRows(
         result.rows.map((r) => {
           const previous = w.entries
@@ -108,9 +123,35 @@ export function ImportPage({
       readCancel.current = null;
     }
   }
+  function reviewSaved(s: SourceDocument, purpose: string) {
+    if (busy) return;
+    setSavedSource(s);
+    setFile(null);
+    setSelectedFiles([]);
+    setType(purpose);
+    setText(s.extracted_text ?? "");
+    setRows(
+      purpose === "statement" ? parseStatementText(s.extracted_text ?? "") : [],
+    );
+    setSaved(true);
+    setStatus(
+      "Reviewing saved document: " +
+        s.name +
+        ". Saving the reviewed records will update your finances.",
+    );
+  }
   const update = (i: number, key: keyof Candidate, value: unknown) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, [key]: value } : r)));
   async function source() {
+    if (savedSource)
+      return {
+        name: savedSource.name,
+        sha256: savedSource.sha256,
+        mime_type: savedSource.mime_type,
+        byte_size: Number(savedSource.byte_size),
+        extracted_text: text.slice(0, 100000),
+        purpose: type,
+      };
     if (!file) throw Error("Choose a document first.");
     return {
       name: file.name.slice(0, 200),
@@ -122,6 +163,10 @@ export function ImportPage({
     };
   }
   async function retainOriginal(id: string) {
+    if (savedSource)
+      return savedSource.storage_key
+        ? " Your saved original is retained."
+        : " Saved text retained; no original was uploaded.";
     if (!file || !retain)
       return " Extracted text saved; original not retained.";
     try {
@@ -166,7 +211,8 @@ export function ImportPage({
       setStatus(
         (selectedFiles.length > 1
           ? selectedFiles.length + " screenshots and combined text saved."
-          : "Document and extracted text saved.") + extra,
+          : "Document stored. No financial records posted yet—complete the review below to update your dashboard.") +
+          extra,
       );
     } catch (e) {
       setStatus((e as Error).message);
@@ -215,10 +261,10 @@ export function ImportPage({
       );
       return;
     }
-    if (!file || !account) return;
+    if ((!file && !savedSource) || !account) return;
     setBusy(true);
     try {
-      const sha256 = await hash(file);
+      const metadata = await source();
       const selected = rows
         .filter((r) => r.selected)
         .map((r) => ({
@@ -236,7 +282,7 @@ export function ImportPage({
         source_id: string;
       }>("/import", "POST", {
         account_id: account,
-        source: { ...(await source()), sha256 },
+        source: metadata,
         rows: selected,
       });
       const extra = await retainOriginal(result.source_id);
@@ -380,7 +426,7 @@ export function ImportPage({
                     ? "Save document again / retry original"
                     : selectedFiles.length > 1
                       ? "Save " + selectedFiles.length + " screenshots"
-                      : "Save document"}
+                      : "Save document only"}
               </button>
               <p className="muted small">
                 Saving the document keeps it in your library. Save reviewed
@@ -486,12 +532,37 @@ export function ImportPage({
           </div>
         </section>
       )}
+      {savedSource && (
+        <section className="panel spaced">
+          <h2>Review saved document</h2>
+          <p>{savedSource.name}</p>
+          <label>
+            Review as
+            <select
+              value={type}
+              onChange={(e) => reviewSaved(savedSource, e.target.value)}
+              disabled={busy}
+            >
+              <option value="statement">Bank statement</option>
+              <option value="portfolio">Investment holdings</option>
+              <option value="fixed">FD / bond</option>
+            </select>
+          </label>
+          <p className="muted">
+            Your original is already saved. Complete the reviewed records below
+            to update investments and net worth.
+          </p>
+        </section>
+      )}
       {text && type !== "statement" && (
         <WealthReview
           key={
-            selectedFiles.map((f) => f.name + f.lastModified).join("|") + type
+            (savedSource?.id ??
+              selectedFiles.map((f) => f.name + f.lastModified).join("|")) +
+            type
           }
           text={text}
+          sourceName={savedSource?.name ?? selectedFiles[0]?.name ?? ""}
           purpose={type}
           w={w}
           busy={busy}
@@ -786,6 +857,30 @@ export function ImportPage({
                   : ""}
               </small>
             </div>
+            <span className="tag">
+              {s.processed_at ||
+              w.imports.some((j) => j.source_document_id === s.id)
+                ? "Records imported"
+                : "Saved only · review needed"}
+            </span>
+            {!!s.extracted_text && !s.processed_at && (
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  reviewSaved(
+                    s,
+                    /portfolio|investment[_ -]*holdings/i.test(s.name) ||
+                      (/holdings/i.test(s.extracted_text ?? "") &&
+                        /shares/i.test(s.extracted_text ?? ""))
+                      ? "portfolio"
+                      : (s.purpose ?? "statement"),
+                  )
+                }
+              >
+                Review and import records
+              </button>
+            )}
             {s.extracted_text && (
               <details>
                 <summary>Read saved text</summary>
@@ -801,6 +896,39 @@ export function ImportPage({
                 </pre>
               </details>
             )}
+            {s.storage_key &&
+              s.mime_type !== "application/zip" &&
+              !s.processed_at && (
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={async () => {
+                    try {
+                      setBusy(true);
+                      setStatus("Loading your saved original for extraction…");
+                      const { url } = await request<{ url: string }>(
+                        "/documents/" + s.id + "/url",
+                      );
+                      const response = await fetch(url);
+                      if (!response.ok)
+                        throw Error(
+                          "Could not read the saved original. Please retry.",
+                        );
+                      await read([
+                        new File([await response.blob()], s.name, {
+                          type: s.mime_type,
+                        }),
+                      ]);
+                    } catch (e) {
+                      setStatus((e as Error).message);
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Read saved original again
+                </button>
+              )}
             {s.storage_key && (
               <button
                 className="secondary"

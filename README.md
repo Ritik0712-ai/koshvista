@@ -75,3 +75,7 @@ Production Google/Drive setup is documented in [GOOGLE_SETUP.md](GOOGLE_SETUP.md
 ### Multiple screenshots
 
 Select up to **six PNG/JPEG screenshots** of the same statement, portfolio or holding in one upload (20 MB total). Each image is read sequentially; extracted text and records appear in one review. **Save N screenshots** retains all unmodified originals in one private ZIP archive. Opening the saved original downloads that archive. PDF and CSV imports remain one file at a time. Possible overlapping transaction rows remain unchecked, and repeated identical holding records must be removed or corrected before posting.
+
+### Saved documents awaiting import
+
+Saving a document stores its evidence only. The library labels unprocessed sources **Saved only · review needed** and offers **Review and import records**. Reopen a saved source as investments, bank activity or an FD/bond without uploading it again; retain its original hash and private file. **Read saved original again** retries local extraction. Portfolio filenames/headers are detected, multiline share layouts produce editable candidates, missing prices remain blank and incomplete holdings cannot be posted. Dark screenshots receive a second contrast pass, but OCR values still require checking against the original. Confirmed holdings update investments and net worth; they do not create bank income or spending.

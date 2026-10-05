@@ -294,7 +294,10 @@ describe.runIf(enabled)(
         extracted_text: "Name,Quantity,Value",
         purpose: "portfolio",
       };
-      const document = await call("/documents", "POST", source);
+      const document = await call("/documents", "POST", {
+        ...source,
+        purpose: "statement",
+      });
       expect(document.status).toBe(201);
       const body = {
         source,
@@ -324,6 +327,7 @@ describe.runIf(enabled)(
         (s: any) => s.id === document.data.source_id,
       );
       expect(saved.extracted_text).toBe(source.extracted_text);
+      expect(saved.purpose).toBe("portfolio");
       expect(saved.records_count).toBe(1);
       expect(
         (await call("/documents/" + saved.id + "/url", "GET", undefined, other))

@@ -37,3 +37,7 @@ This checkpoint distinguishes implemented functionality from unverified external
 ## Screenshot batch update
 
 Up to six PNG/JPEG images can be imported together within the 20 MB source limit. Extraction combines them into one review with per-image progress. Originals are preserved in a deterministic ZIP archive; selection order changes do not create a new source hash. Repeated identical images are rejected. Possible overlapping transaction rows remain unchecked; repeated identical holding records block posting until corrected. Synthetic six-image browser OCR produced six review records without errors.
+
+## Saved portfolio recovery update
+
+Added saved-document review/resume, purpose correction, original re-reading, portfolio detection, multiline shares extraction, high-contrast OCR for dark screens, missing-value gates and review totals. Document storage is explicitly distinct from importing financial records. A focused live-database test verifies a previously saved statement can be imported as a portfolio exactly once while keeping its source identity. Personal source files and verification data stay in ignored artifacts and are never committed.

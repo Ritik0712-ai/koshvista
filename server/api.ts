@@ -220,7 +220,7 @@ async function saveSource(
   await profile(db, owner);
   return (
     await db.query(
-      "INSERT INTO app.sources(owner_id,name,sha256,mime_type,byte_size,extracted_text,purpose) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,sha256) DO UPDATE SET extracted_text=EXCLUDED.extracted_text RETURNING *",
+      "INSERT INTO app.sources(owner_id,name,sha256,mime_type,byte_size,extracted_text,purpose) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(owner_id,sha256) DO UPDATE SET extracted_text=EXCLUDED.extracted_text,purpose=EXCLUDED.purpose RETURNING *",
       [
         owner,
         source.name,

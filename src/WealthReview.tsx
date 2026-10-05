@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Papa from "papaparse";
 import type { Workspace } from "../shared/types";
-import { today } from "../shared/finance";
+import { today, d, formatMoney } from "../shared/finance";
 
 type Draft = Record<string, string>;
 const portfolioFields = [
@@ -33,16 +33,51 @@ const labels: Record<string, string> = {
   start_on: "Start date",
   maturity_on: "Maturity date",
 };
-const clean = (s: string) => s.replace(/[₹,\s]/g, "");
+const clean = (s: string) => s.replace(/[₹$,\s]/g, "");
+export function dateFromSourceName(name: string) {
+  const iso = name.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+  if (iso) return iso[1];
+  const match = name.match(
+    /(\d{1,2})[ _-]+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[ _-]+(20\d{2})/i,
+  );
+  if (!match) return "";
+  const month =
+    [
+      "jan",
+      "feb",
+      "mar",
+      "apr",
+      "may",
+      "jun",
+      "jul",
+      "aug",
+      "sep",
+      "oct",
+      "nov",
+      "dec",
+    ].indexOf(match[2].toLowerCase()) + 1;
+  const date =
+    match[3] +
+    "-" +
+    String(month).padStart(2, "0") +
+    "-" +
+    match[1].padStart(2, "0");
+  const parsed = new Date(date);
+  return !Number.isNaN(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+    ? date
+    : "";
+}
 export function wealthCandidates(
   text: string,
   purpose: string,
   currency: string,
+  sourceName = "",
 ): Draft[] {
   const documentedDate =
     text.match(
       /(?:valuation date|as of|as on)\s*[:=-]?\s*(\d{4}-\d{2}-\d{2})/i,
-    )?.[1] ?? "";
+    )?.[1] ?? dateFromSourceName(sourceName);
   if (purpose === "portfolio") {
     const parsed = Papa.parse<Record<string, string>>(text, {
       header: true,
@@ -63,6 +98,49 @@ export function wealthCandidates(
         cost_basis: clean(r.cost_basis ?? r.invested_amount ?? ""),
       }));
     if (!parsed.errors.length && rows.length) return rows.slice(0, 100);
+    const lines = text
+      .split(/\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const multiline: Draft[] = [];
+    for (let i = 1; i < lines.length; i++) {
+      const shares = lines[i].match(/^(\d+(?:\.\d+)?)\s+(?:shares?|units?)\b/i);
+      if (!shares) continue;
+      const title = lines[i - 1];
+      if (
+        !/^[A-Za-z]/.test(title) ||
+        /^(?:stocks|sort|holdings|invested|current|explore|positions|orders|valuation date)\b/i.test(
+          title,
+        )
+      )
+        continue;
+      const quoted = title.match(/[₹$]\s*([\d,]+\.\d{2})/);
+      const name = title.replace(/\s+[₹$%]?\s*[\d,]+\.\d{2}.*$/, " ").trim();
+      const cost = lines[i].match(/\(\s*([₹$]?[\d,]+\.\d{2})\s*\)/)?.[1] ?? "";
+      const next =
+        lines[i + 1]?.match(/^[₹$]?\s*([\d,]+\.\d{2})\s*$/)?.[1] ?? "";
+      const draft = {
+        instrument_id: "",
+        name,
+        symbol: "",
+        asset_class: "Equity",
+        currency,
+        as_of: documentedDate,
+        quantity: shares[1],
+        market_value: quoted?.[1] ? clean(quoted[1]) : clean(next),
+        cost_basis: clean(cost),
+      };
+      const previous = multiline.find(
+        (r) =>
+          r.name.toLowerCase() === name.toLowerCase() &&
+          r.quantity === draft.quantity,
+      );
+      if (previous) {
+        if (!previous.market_value) previous.market_value = draft.market_value;
+        if (!previous.cost_basis) previous.cost_basis = draft.cost_basis;
+      } else multiline.push(draft);
+    }
+    if (multiline.length) return multiline.slice(0, 100);
     return text
       .split(/\n/)
       .flatMap((line) => {
@@ -122,12 +200,14 @@ export function wealthCandidates(
 
 export function WealthReview({
   text,
+  sourceName = "",
   purpose,
   w,
   busy,
   onSave,
 }: {
   text: string;
+  sourceName?: string;
   purpose: string;
   w: Workspace;
   busy: boolean;
@@ -161,7 +241,7 @@ export function WealthReview({
           note: "",
         };
   const [rows, setRows] = useState<Draft[]>(() => {
-    const r = wealthCandidates(text, purpose, w.profile.currency);
+    const r = wealthCandidates(text, purpose, w.profile.currency, sourceName);
     return r.length ? r : [blank()];
   });
   const repeatedRows = rows.filter(
@@ -175,6 +255,15 @@ export function WealthReview({
             JSON.stringify(Object.entries(row).sort()),
         ),
   ).length;
+  const missingPortfolioValues =
+    purpose === "portfolio" &&
+    rows.some((r) => !r.name || !r.as_of || !r.quantity || !r.market_value);
+  const portfolioTotal =
+    purpose === "portfolio" &&
+    rows.length &&
+    rows.every((r) => /^\d+(?:\.\d+)?$/.test(clean(r.market_value)))
+      ? rows.reduce((sum, r) => sum.plus(clean(r.market_value)), d(0))
+      : null;
   const [verified, setVerified] = useState(false);
   const [error, setError] = useState("");
   const update = (i: number, k: string, v: string) => {
@@ -191,7 +280,17 @@ export function WealthReview({
         Detected fields are suggestions. Fill any missing details and check the
         source. Saving a portfolio creates dated holdings; saving a deposit adds
         it to FDs & bonds. These imports do not create bank cash movements.
+        Missing current values stay blank; they are never assumed to be zero.
+        Valuation dates inferred from a document name must also be checked.
       </p>
+      {purpose === "portfolio" && (
+        <p className="notice">
+          {rows.length} holdings in review · Current total:{" "}
+          {portfolioTotal
+            ? formatMoney(portfolioTotal, w.profile.currency)
+            : "Incomplete — fill the missing current values"}
+        </p>
+      )}
       {rows.map((r, i) => (
         <fieldset className="panel spaced" key={i}>
           <legend>Record {i + 1}</legend>
@@ -350,6 +449,7 @@ export function WealthReview({
               text,
               purpose,
               w.profile.currency,
+              sourceName,
             );
             setRows(detected.length ? detected : [blank()]);
             setVerified(false);
@@ -378,7 +478,13 @@ export function WealthReview({
         I checked these dates, quantities and amounts against my document.
       </label>
       <button
-        disabled={busy || !verified || !rows.length || !!repeatedRows}
+        disabled={
+          busy ||
+          !verified ||
+          !rows.length ||
+          !!repeatedRows ||
+          !!missingPortfolioValues
+        }
         onClick={async () => {
           setError("");
           try {
